@@ -1,0 +1,12 @@
+# Lightweight objdump image for AI-REO tool integration.
+# Replaces the 2GB+ REMnux image with a minimal Debian image (~50MB).
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends binutils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Default working directory matches AI-REO's Docker executor mount point
+WORKDIR /mnt/staging
+
+CMD ["/bin/sh"]

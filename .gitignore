@@ -1,0 +1,29 @@
+# AI planning and local agent customizations
+.init-ai/
+
+# Python virtual environment
+.venv/
+
+# Pytest cache
+.pytest_cache/
+
+# Runtime / temp data
+tmp/
+*.db
+*.db-shm
+*.db-wal
+
+# Common ignores
+node_modules/
+.env
+.env.local
+dist/
+build/
+.next/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+*.pyo
