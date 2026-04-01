@@ -8,7 +8,7 @@
 .pytest_cache/
 
 # Runtime / temp data
-tmp/
+tmp/.ai-reo/
 *.db
 *.db-shm
 *.db-wal
