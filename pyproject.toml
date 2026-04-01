@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-reo"
+version = "0.2.0"
+description = "AI Reverse Engineering Orchestrator – local-first, chat-driven binary analysis platform with a team of specialized AI agents, 9 Docker-sandboxed tools, and multi-provider LLM support."
+authors = [{ name = "AI-REO Contributors" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111.0",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "langgraph>=0.1.0",
+    "langchain-core>=0.2.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
+    "docker>=7.1.0",
+    "python-dotenv>=1.0.0",
+    "litellm>=1.40.0",
+    "httpx>=0.27.0",
+    "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "black>=24.4.0",
+    "isort>=5.13.0",
+    "mypy>=1.10.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+ai-reo = "ai_reo.main:main"
+ai-reo-diag = "ai_reo.main:diag"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_reo"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
