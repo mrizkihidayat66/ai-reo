@@ -27,6 +27,7 @@ from ai_reo.api.schemas import (
     SessionResponse,
     ToolInvokeRequest,
     BinaryUploadResponse,
+    ZipUploadResponse,
 )
 from ai_reo.api.websockets import manager as ws_manager
 from ai_reo.db.engine import get_db
@@ -144,8 +145,8 @@ def create_session(
     # Create the per-session working directory
     sessions_root = Path(settings.tools.sessions_dir).resolve()
     session_dir = sessions_root / session.id
-    binary_dir = session_dir / "binary"
-    binary_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir = session_dir / "workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
 
     # Update the DB record with the resolved working directory
     session.working_dir = str(session_dir)
@@ -208,7 +209,7 @@ async def upload_binary(
 
     # Determine destination directory
     if session_id:
-        session_dir = Path(settings.tools.sessions_dir).resolve() / session_id / "binary"
+        session_dir = Path(settings.tools.sessions_dir).resolve() / session_id / "workspace"
     else:
         session_dir = Path(settings.tools.sessions_dir).resolve() / "_staging"
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -233,6 +234,81 @@ async def upload_binary(
         filename=safe_filename,
         binary_hash=sha256_hash.hexdigest(),
         size_bytes=size,
+    )
+
+
+@router.post("/upload-zip", response_model=ZipUploadResponse, status_code=201)
+async def upload_zip(
+    file: UploadFile = File(...),
+    session_id: str = Query(None, description="Target session ID. If omitted, files are placed in a temp staging area."),
+) -> ZipUploadResponse:
+    """Upload a ZIP archive, extract all files into the session's binary directory."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided.")
+
+    fname_lower = (file.filename or "").lower()
+    if not fname_lower.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are accepted.")
+
+    # Read entire zip into memory (capped at configured limit)
+    from ai_reo.config import settings
+    MAX_ZIP_SIZE = settings.server.max_upload_size_mb * 1024 * 1024
+    data = await file.read()
+    if len(data) > MAX_ZIP_SIZE:
+        raise HTTPException(status_code=400, detail=f"ZIP file exceeds {settings.server.max_upload_size_mb} MB limit.")
+
+    import io as _io
+    try:
+        zf = zipfile.ZipFile(_io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid ZIP archive.")
+
+    # Determine destination directory
+    if session_id:
+        session_dir = Path(settings.tools.sessions_dir).resolve() / session_id / "workspace"
+    else:
+        session_dir = Path(settings.tools.sessions_dir).resolve() / "_staging"
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    extracted: List[str] = []
+    total_size = 0
+    sha256_hash = hashlib.sha256()
+
+    for info in zf.infolist():
+        # Skip directories
+        if info.is_dir():
+            continue
+
+        name = info.filename
+        # Path traversal guard
+        if ".." in name or name.startswith("/") or name.startswith("\\"):
+            continue
+        # Skip macOS resource forks and hidden files
+        basename = Path(name).name
+        if basename.startswith(".") or "__MACOSX" in name:
+            continue
+
+        # Flatten: extract just the filename (ignore zip internal directory paths)
+        safe_name = Path(basename).name
+        if not safe_name:
+            continue
+
+        dest = session_dir / safe_name
+        file_data = zf.read(info.filename)
+        total_size += len(file_data)
+        sha256_hash.update(file_data)
+        dest.write_bytes(file_data)
+        extracted.append(safe_name)
+
+    zf.close()
+
+    if not extracted:
+        raise HTTPException(status_code=400, detail="ZIP archive contains no usable files.")
+
+    return ZipUploadResponse(
+        filenames=extracted,
+        binary_hash=sha256_hash.hexdigest(),
+        total_size_bytes=total_size,
     )
 
 
@@ -299,13 +375,15 @@ def export_session(
         ]
         zf.writestr("tool_executions.json", json.dumps(tools_data, indent=2, default=str))
 
-        # 4. Binary file (if it exists on disk)
+        # 4. Workspace files (if they exist on disk)
         if session.working_dir:
-            binary_dir = Path(session.working_dir) / "binary"
-            if binary_dir.exists():
-                for fpath in binary_dir.iterdir():
+            workspace_dir = Path(session.working_dir) / "workspace"
+            if not workspace_dir.exists():
+                workspace_dir = Path(session.working_dir) / "binary"  # compat with old sessions
+            if workspace_dir.exists():
+                for fpath in workspace_dir.iterdir():
                     if fpath.is_file():
-                        zf.write(fpath, f"binary/{fpath.name}")
+                        zf.write(fpath, f"workspace/{fpath.name}")
 
     buf.seek(0)
     raw_name = session.name or session.id
@@ -329,6 +407,52 @@ def get_graph(
     return GraphExportResponse(**export)
 
 
+@router.post("/{session_id}/kg/import")
+def import_knowledge_graph(
+    session_id: str,
+    payload: Dict[str, Any],
+    svc: SessionService = Depends(get_session_service),
+    kg: KnowledgeGraphService = Depends(get_kg_service),
+) -> Dict[str, Any]:
+    """Import and merge nodes from an exported Knowledge Graph JSON into this session.
+
+    Deduplicates by node name+type to avoid inflating the graph with redundant entries.
+    """
+    # Validate target session exists
+    svc.load_session(session_id)
+
+    nodes_to_import = payload.get("nodes", [])
+    if not isinstance(nodes_to_import, list):
+        raise HTTPException(status_code=400, detail="Payload must have a 'nodes' list.")
+
+    # Build dedup set from existing nodes (name+type)
+    existing = kg.export_graph(session_id)
+    existing_keys = {
+        (n.get("name", ""), n.get("type", ""))
+        for n in existing.get("nodes", [])
+    }
+
+    imported = 0
+    skipped = 0
+    for node in nodes_to_import:
+        key = (node.get("name", ""), node.get("type", ""))
+        if key in existing_keys or (not key[0] and not key[1]):
+            skipped += 1
+            continue
+        kg.repo.add_node(
+            session_id=session_id,
+            node_type=node.get("type") or "unknown",
+            created_by_agent=node.get("created_by_agent") or "import",
+            address=node.get("address"),
+            name=node.get("name"),
+            data=node.get("data", {}),
+        )
+        existing_keys.add(key)
+        imported += 1
+
+    return {"imported": imported, "skipped": skipped, "session_id": session_id}
+
+
 # ---------------------------------------------------------------------------
 # Analysis Pipeline
 # ---------------------------------------------------------------------------
@@ -339,6 +463,7 @@ async def analyze_session(
     req: AnalyzeRequest,
     svc: SessionService = Depends(get_session_service),
     kg: KnowledgeGraphService = Depends(get_kg_service),
+    tool_svc: ToolExecutionService = Depends(get_tool_service),
 ) -> AnalyzeResponse:
     """Trigger the LangGraph workflow to autonomously analyze the binary."""
 
@@ -364,6 +489,13 @@ async def analyze_session(
     graph_data = kg.export_graph(session_id)
     graph_str = json.dumps(graph_data["nodes"]) if graph_data["nodes"] else "Empty Graph"
 
+    # Build a summary of tools already run in previous invocations so agents
+    # don't redundantly re-execute them.
+    tool_history = tool_svc.get_history(session_id)
+    completed_tools = ", ".join(
+        sorted({t.tool_name for t in tool_history if t.exit_code == 0})
+    ) if tool_history else ""
+
     initial_state = {
         "session_id": session_id,
         "messages": [{"role": "user", "content": req.goal}],
@@ -376,6 +508,8 @@ async def analyze_session(
         "last_result": None,
         "findings_count": len(graph_data.get("nodes", [])),
         "consecutive_empty_steps": 0,
+        # Previously completed tools (anti-redundancy)
+        "completed_tools": completed_tools,
     }
 
     final_state = initial_state
@@ -444,6 +578,13 @@ async def analyze_session(
     if active_agent == "documentation" or final_state.get("final_report"):
         svc.complete_session(session_id)
 
+    # Notify the UI that the pipeline has finished
+    await ws_manager.broadcast_to_session(session_id, {
+        "type": "analysis_complete",
+        "status": "completed" if final_state.get("final_report") else "paused_for_input",
+        "active_agent": active_agent,
+    })
+
     return AnalyzeResponse(
         status="completed" if final_state.get("final_report") else "paused_for_input",
         final_report=final_state.get("final_report"),
@@ -460,22 +601,41 @@ def get_chat_history(
     session_id: str,
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    """Return all LLM interaction logs for a session as a chat-like timeline."""
-    repo = LLMInteractionRepository(db)
-    interactions = repo.get_history(session_id)
-    return [
+    """Return a merged, time-ordered timeline of LLM interactions AND tool executions."""
+    llm_repo = LLMInteractionRepository(db)
+    tool_repo = ToolExecutionRepository(db)
+
+    # LLM interaction entries — type is 'chat_message' for all (agent field drives rendering)
+    interactions = llm_repo.get_history(session_id)
+    llm_entries = [
         {
             "id": i.id,
+            "type": "chat_message",
             "agent": i.agent_name,
-            "provider": i.provider,
-            "model": i.model,
-            "prompt": i.prompt,
             "response": i.response,
-            "token_count": i.token_count,
-            "timestamp": i.timestamp.isoformat() if i.timestamp else None,
+            "timestamp": i.timestamp.isoformat() if i.timestamp else "",
         }
         for i in interactions
     ]
+
+    # Tool execution entries — type is 'tool_result'
+    executions = tool_repo.get_history(session_id)
+    tool_entries = [
+        {
+            "id": t.id,
+            "type": "tool_result",
+            "agent": t.invoked_by_agent,
+            "tool": t.tool_name,
+            "result_preview": (t.stdout or "")[:8000],
+            "exit_code": t.exit_code,
+            "timestamp": t.timestamp.isoformat() if t.timestamp else "",
+        }
+        for t in executions
+    ]
+
+    # Merge and sort chronologically
+    merged = sorted(llm_entries + tool_entries, key=lambda x: x.get("timestamp", ""))
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -598,10 +758,10 @@ def auto_run_ctf_test(
     # Create session working directory and copy binary
     sessions_root = Path(settings.tools.sessions_dir).resolve()
     session_dir = sessions_root / session.id
-    binary_dir = session_dir / "binary"
-    binary_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir = session_dir / "workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
 
-    dest = binary_dir / "CTF_Level5.exe"
+    dest = workspace_dir / "CTF_Level5.exe"
     shutil.copy2(str(test_binary), str(dest))
 
     # Compute real hash

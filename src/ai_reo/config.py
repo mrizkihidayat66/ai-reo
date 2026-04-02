@@ -24,6 +24,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Load .env variables into os.environ immediately so nested BaseSettings pick them up
 load_dotenv()
 
+# Repo root resolved at import time — works when installed in editable mode (`pip install -e .`).
+# Override with AI_REO_AGENTS_DIR / AI_REO_SKILLS_DIR env vars for production deployments.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 class DatabaseSettings(BaseSettings):
     """Settings for data persistence."""
@@ -49,6 +53,22 @@ class ToolSettings(BaseSettings):
         default="ai-reo-tools",
         description="Docker network connecting tool containers.",
     )
+    max_tool_rounds: int = Field(
+        default=10,
+        description="Maximum tool-call rounds per agent step before forcing completion.",
+    )
+    skills_dir: Path = Field(
+        default=_REPO_ROOT / "skills",
+        description="Directory containing skill .md files. Defaults to the bundled skills/ at the repo root.",
+    )
+    scripts_dir: Path = Field(
+        default=_REPO_ROOT / "tmp" / ".ai-reo" / "scripts",
+        description="Persistent directory for agent-generated reusable scripts. Defaults to tmp/.ai-reo/scripts inside the repo.",
+    )
+    agents_dir: Path = Field(
+        default=_REPO_ROOT / "agents",
+        description="Directory containing agent instruction .md files. Defaults to the bundled agents/ at the repo root.",
+    )
 
 
 class ServerSettings(BaseSettings):
@@ -61,6 +81,10 @@ class ServerSettings(BaseSettings):
     log_level: Literal["debug", "info", "warning", "error", "critical"] = Field(
         default="info",
         description="Logging level for uvicorn and application.",
+    )
+    max_upload_size_mb: int = Field(
+        default=200,
+        description="Maximum size (in MB) for ZIP file uploads. Default: 200 MB.",
     )
 
 

@@ -17,6 +17,8 @@ from langgraph.graph import StateGraph, END
 
 from ai_reo.agents.protocol import AgentStepResult
 from ai_reo.agents.specialized import (
+    DebuggerAgent,
+    DeobfuscatorAgent,
     DocumentationAgent,
     DynamicAnalyst,
     OrchestratorAgent,
@@ -52,6 +54,9 @@ class AnalysisState(TypedDict):
     findings_count: int                          # Total KG nodes accumulated in this session
     consecutive_empty_steps: int                 # Steps with 0 new findings in a row
 
+    # Anti-redundancy: tools that already ran successfully in prior invocations
+    completed_tools: str
+
     # Final output
     final_report: str
     error: str
@@ -65,6 +70,8 @@ orchestrator = OrchestratorAgent()
 static_analyst = StaticAnalyst()
 dynamic_analyst = DynamicAnalyst()
 documentation_agent = DocumentationAgent()
+deobfuscator_agent = DeobfuscatorAgent()
+debugger_agent = DebuggerAgent()
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +117,8 @@ async def direct_chat_node(state: AnalysisState) -> Dict[str, Any]:
     ctx.add_message("user", state.get("current_goal", "Hello"))
 
     try:
-        provider = llm_manager.get_provider()
-        response = await provider.chat_completion(messages=ctx.get_history())
+        provider = llm_manager.get_provider(task_type="CHAT")
+        response = await provider.chat_completion(messages=ctx.get_history(), task_type="CHAT")
         content = response.choices[0].message.content or "Hello! I'm AI-REO."
     except Exception as e:
         content = f"I'm AI-REO, your binary reverse engineering assistant. (LLM error: {e})"
@@ -133,14 +140,14 @@ async def direct_chat_node(state: AnalysisState) -> Dict[str, Any]:
         from ai_reo.db.engine import get_db_session
         from ai_reo.db.repositories import LLMInteractionRepository
 
-        provider = llm_manager.get_provider()
+        provider = llm_manager.get_provider(task_type="CHAT")
         with get_db_session() as db:
             repo = LLMInteractionRepository(db)
             repo.log_interaction(
                 session_id=session_id,
                 agent_name="direct_chat",
                 provider=provider.config.display_name,
-                model=provider.config.get_effective_model(),
+                model=provider.config.get_effective_model(task_type="CHAT"),
                 prompt=state.get("current_goal", "")[:2000],
                 response=content[:4000],
                 token_count=max(1, len(content) // 4),
@@ -182,9 +189,18 @@ async def orchestrator_node(state: AnalysisState) -> Dict[str, Any]:
         last_agent_summary=last_summary,
         last_goal_completed=str(last_goal_completed),
         last_findings_count=str(last_findings_count),
-        tools="static_analyst, dynamic_analyst, documentation",
+        tools="static_analyst, dynamic_analyst, deobfuscator, debugger, documentation",
     )
     ctx.add_message("system", sys_msg)
+
+    # Anti-redundancy: inform orchestrator of tools already run in this session
+    completed_tools = state.get("completed_tools", "")
+    if completed_tools:
+        ctx.add_message(
+            "system",
+            f"PREVIOUSLY COMPLETED TOOLS (their results are already in the Knowledge Graph — "
+            f"DO NOT re-invoke these unless the user explicitly requests it): {completed_tools}",
+        )
 
     # Ensure there is at least one user message
     recent = list(state["messages"][-5:])
@@ -232,7 +248,11 @@ async def orchestrator_node(state: AnalysisState) -> Dict[str, Any]:
 
     # --- Text heuristic fallback ---
     lower = content.lower()
-    if any(kw in lower for kw in ("static", "strings", "disassem", "header", "radare", "objdump")):
+    if any(kw in lower for kw in ("obfuscat", "packed", "packer", "unpack", "encrypt", "protect")):
+        next_agent = "deobfuscator"
+    elif any(kw in lower for kw in ("debug", "vuln", "exploit", "symbolic", "angr", "buffer overflow")):
+        next_agent = "debugger"
+    elif any(kw in lower for kw in ("static", "strings", "disassem", "header", "radare", "objdump")):
         next_agent = "static_analyst"
     elif any(kw in lower for kw in ("dynamic", "execut", "trace", "emulat", "sandbox")):
         next_agent = "dynamic_analyst"
@@ -272,7 +292,9 @@ async def run_agent_node(agent_name: str, agent_obj: Any, state: AnalysisState) 
     try:
         from pathlib import Path as _Path
         from ai_reo.config import settings as _settings
-        binary_dir = _Path(_settings.tools.sessions_dir).resolve() / session_id / "binary"
+        binary_dir = _Path(_settings.tools.sessions_dir).resolve() / session_id / "workspace"
+        if not binary_dir.exists():
+            binary_dir = _Path(_settings.tools.sessions_dir).resolve() / session_id / "binary"
         if binary_dir.exists():
             binary_files = [f.name for f in binary_dir.iterdir() if f.is_file()]
             if binary_files:
@@ -284,8 +306,32 @@ async def run_agent_node(agent_name: str, agent_obj: Any, state: AnalysisState) 
     except Exception as _e:
         logger.debug("Could not enumerate binary files: %s", _e)
 
+    # Inject matching skills as additional system context.
+    try:
+        from ai_reo.skills.loader import skill_loader as _skill_loader
+        agent_skills = _skill_loader.get_for_agent(agent_name)
+        for skill in agent_skills:
+            ctx.add_message(
+                "system",
+                f"## Skill: {skill.name}\n\n{skill.content}",
+            )
+        if agent_skills:
+            logger.debug("Injected %d skill(s) for agent %s: %s",
+                         len(agent_skills), agent_name, [s.name for s in agent_skills])
+    except Exception as _e:
+        logger.debug("Could not inject skills for agent %s: %s", agent_name, _e)
+
     # Inject a user message so LM Studio doesn't crash on tool schemas
     ctx.add_message("user", f"Your current task: {state.get('current_goal', 'Analyze the binary.')}")
+
+    # Anti-redundancy: inform agent of tools already run in this session
+    completed_tools = state.get("completed_tools", "")
+    if completed_tools:
+        ctx.add_message(
+            "system",
+            f"PREVIOUSLY COMPLETED TOOLS (their results are already in the Knowledge Graph — "
+            f"DO NOT re-invoke these unless the user explicitly requests it): {completed_tools}",
+        )
 
     # Append recent history
     history_slice = list(state["messages"][-10:])
@@ -332,6 +378,14 @@ async def dynamic_analyst_node(state: AnalysisState) -> Dict[str, Any]:
     return await run_agent_node("dynamic_analyst", dynamic_analyst, state)
 
 
+async def deobfuscator_node(state: AnalysisState) -> Dict[str, Any]:
+    return await run_agent_node("deobfuscator", deobfuscator_agent, state)
+
+
+async def debugger_node(state: AnalysisState) -> Dict[str, Any]:
+    return await run_agent_node("debugger", debugger_agent, state)
+
+
 async def documentation_node(state: AnalysisState) -> Dict[str, Any]:
     res = await run_agent_node("documentation", documentation_agent, state)
 
@@ -375,6 +429,10 @@ def agent_router(state: AnalysisState) -> str:
         return "static_analyst"
     elif "dynamic" in target:
         return "dynamic_analyst"
+    elif "deobfusc" in target or "obfusc" in target or "unpack" in target:
+        return "deobfuscator"
+    elif "debug" in target or "vuln" in target or "exploit" in target:
+        return "debugger"
     elif "doc" in target:
         return "documentation"
     return "documentation"  # Final fallback
@@ -393,6 +451,8 @@ def build_graph():
     workflow.add_node("orchestrator", orchestrator_node)
     workflow.add_node("static_analyst", static_analyst_node)
     workflow.add_node("dynamic_analyst", dynamic_analyst_node)
+    workflow.add_node("deobfuscator", deobfuscator_node)
+    workflow.add_node("debugger", debugger_node)
     workflow.add_node("documentation", documentation_node)
 
     # Entry: classify intent first
@@ -418,13 +478,17 @@ def build_graph():
         {
             "static_analyst": "static_analyst",
             "dynamic_analyst": "dynamic_analyst",
+            "deobfuscator": "deobfuscator",
+            "debugger": "debugger",
             "documentation": "documentation",
         },
     )
 
-    # Analyst cycle: analyst finishes → back to orchestrator for re-evaluation
+    # Analyst cycle: agents finish → back to orchestrator for re-evaluation
     workflow.add_edge("static_analyst", "orchestrator")
     workflow.add_edge("dynamic_analyst", "orchestrator")
+    workflow.add_edge("deobfuscator", "orchestrator")
+    workflow.add_edge("debugger", "orchestrator")
 
     # Documentation is terminal
     workflow.add_edge("documentation", END)

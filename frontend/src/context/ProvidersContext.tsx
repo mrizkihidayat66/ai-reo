@@ -19,6 +19,10 @@ export interface ProviderConfig {
   enabled: boolean;
   /** Set to true after a successful test ping */
   tested: boolean;
+  // Advanced settings (optional overrides)
+  temperature?: number | null;
+  max_tokens?: number | null;
+  request_timeout?: number | null;
 }
 
 export interface TestResult {
@@ -73,6 +77,9 @@ export const ProvidersProvider: React.FC<{ children: ReactNode }> = ({ children 
             models: p.models,
             selected_model: p.selected_model,
             enabled: p.enabled,
+            temperature: p.temperature ?? null,
+            max_tokens: p.max_tokens ?? null,
+            request_timeout: p.request_timeout ?? null,
           }),
         });
       } catch { /* backend may be unavailable, ok */ }
@@ -92,6 +99,9 @@ export const ProvidersProvider: React.FC<{ children: ReactNode }> = ({ children 
         models: cfg.models,
         selected_model: cfg.selected_model,
         enabled: cfg.enabled,
+        temperature: (cfg as any).temperature ?? null,
+        max_tokens: (cfg as any).max_tokens ?? null,
+        request_timeout: (cfg as any).request_timeout ?? null,
       }),
     });
     const data = await res.json();

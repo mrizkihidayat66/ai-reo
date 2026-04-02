@@ -103,12 +103,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Register all tools into the global registry
     from ai_reo.tools.registry import tool_registry
-    from ai_reo.tools.basic import FsReadTool, FsWriteTool, StringsExtractTool, BinaryInfoTool
-    from ai_reo.tools.re_tools import Radare2Tool, ObjdumpTool, ReadelfTool, NmTool, AngrTool, UpxTool, CapaTool, YaraTool, GhidraHeadlessTool
+    from ai_reo.tools.basic import FsReadTool, FsWriteTool, StringsExtractTool, BinaryInfoTool, EntropyAnalysisTool, HexDumpTool, FileTypeTool, SharedWriteTool, SharedListTool, BintropTool, PEFileTool
+    from ai_reo.tools.re_tools import Radare2Tool, ObjdumpTool, ReadelfTool, NmTool, AngrTool, UpxTool, CapaTool, YaraTool, GhidraHeadlessTool, DieTool, LiefTool, FlossTool, BinwalkTool, CheksecTool, UnipackerTool
     tool_registry.register(FsReadTool())
     tool_registry.register(FsWriteTool())
     tool_registry.register(StringsExtractTool())
     tool_registry.register(BinaryInfoTool())
+    tool_registry.register(EntropyAnalysisTool())
+    tool_registry.register(HexDumpTool())
+    tool_registry.register(FileTypeTool())
+    tool_registry.register(SharedWriteTool())
+    tool_registry.register(SharedListTool())
+    tool_registry.register(BintropTool())
+    tool_registry.register(PEFileTool())
     tool_registry.register(Radare2Tool())
     tool_registry.register(ObjdumpTool())
     tool_registry.register(ReadelfTool())
@@ -118,6 +125,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     tool_registry.register(CapaTool())
     tool_registry.register(YaraTool())
     tool_registry.register(GhidraHeadlessTool())
+    tool_registry.register(DieTool())
+    tool_registry.register(LiefTool())
+    tool_registry.register(FlossTool())
+    tool_registry.register(BinwalkTool())
+    tool_registry.register(CheksecTool())
+    tool_registry.register(UnipackerTool())
     logger.info("Tool registry initialised with %d tools.", len(tool_registry._tools))
 
     yield  # hand off to the application
@@ -283,10 +296,12 @@ async def unhandled_exception_handler(
 from ai_reo.api.routes import router as sessions_router, runs_router
 from ai_reo.api.provider_routes import router as providers_router
 from ai_reo.api.tool_routes import router as tools_router
+from ai_reo.api.skills_routes import router as skills_router
 app.include_router(sessions_router)
 app.include_router(providers_router)
 app.include_router(runs_router)
 app.include_router(tools_router)
+app.include_router(skills_router)
 
 
 @app.get("/", summary="API root information")

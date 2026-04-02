@@ -8,8 +8,7 @@ class StaticAnalyst(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
             role_name="static_analyst",
-            # Strict authorization ensuring it has no sandbox execution capability (dynamic analysis)
-            allowed_tools=["strings_extract", "binary_info", "radare2", "objdump", "readelf", "nm", "angr", "upx", "capa", "yara", "ghidra_headless", "fs_read", "fs_write"]
+            allowed_tools=["strings_extract", "binary_info", "entropy_analysis", "hex_dump", "file_type", "bintropy", "pefile", "radare2", "objdump", "readelf", "nm", "angr", "upx", "capa", "yara", "die", "lief", "floss", "binwalk", "checksec", "ghidra_headless", "fs_read", "fs_write", "scripts_write", "scripts_list"]
         )
 
 class DynamicAnalyst(BaseAgent):
@@ -17,8 +16,6 @@ class DynamicAnalyst(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
             role_name="dynamic_analyst",
-            # For the MVP, it utilizes basic shell commands. 
-            # We haven't implemented ShellCommandTool specifically yet, but declaring intent here.
             allowed_tools=["fs_read", "fs_write"]
         )
 
@@ -27,7 +24,7 @@ class DocumentationAgent(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
             role_name="documentation",
-            allowed_tools=[]  # Explicitly ZERO tools. Documentation cannot invoke arbitrary execution.
+            allowed_tools=[]
         )
 
 class OrchestratorAgent(BaseAgent):
@@ -35,5 +32,21 @@ class OrchestratorAgent(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
             role_name="orchestrator",
-            allowed_tools=[]  # The Orchestrator plans structurally via LLM outputs, tools aren't strictly required for routing in our LangGraph architecture.
+            allowed_tools=[]
+        )
+
+class DeobfuscatorAgent(BaseAgent):
+    """Agent specialized in detecting and reversing obfuscation, packing, and encryption."""
+    def __init__(self) -> None:
+        super().__init__(
+            role_name="deobfuscator",
+            allowed_tools=["upx", "die", "entropy_analysis", "hex_dump", "file_type", "bintropy", "floss", "yara", "radare2", "angr", "lief", "unipacker", "strings_extract", "fs_read", "fs_write", "scripts_write", "scripts_list"]
+        )
+
+class DebuggerAgent(BaseAgent):
+    """Agent specialized in symbolic execution and vulnerability triage."""
+    def __init__(self) -> None:
+        super().__init__(
+            role_name="debugger",
+            allowed_tools=["angr", "radare2", "lief", "pefile", "checksec", "hex_dump", "strings_extract", "fs_read", "fs_write", "scripts_write", "scripts_list"]
         )

@@ -33,6 +33,9 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onOpenSession, onGoT
   const [uploadError, setUploadError] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [sessionName, setSessionName] = useState('');
+  const [extractedFiles, setExtractedFiles] = useState<string[]>([]);
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const [pendingHash, setPendingHash] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Rename state
@@ -69,6 +72,28 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onOpenSession, onGoT
       const session = await createRes.json();
       if (!createRes.ok) throw new Error(session.message || session.detail || 'Failed to create session');
 
+      if (file.name.toLowerCase().endsWith('.zip')) {
+        // ZIP: extract into session workspace, then show file picker
+        setUploadText('Extracting ZIP archive...');
+        const formData = new FormData();
+        formData.append('file', file);
+        const uploadRes = await fetch(`${API}/sessions/upload-zip?session_id=${session.id}`, {
+          method: 'POST',
+          body: formData,
+        });
+        const uploadData = await uploadRes.json();
+        if (!uploadRes.ok) throw new Error(uploadData.message || uploadData.detail || 'ZIP extraction failed');
+
+        // Show file picker — user selects primary binary
+        setUploading(false);
+        setExtractedFiles(uploadData.filenames);
+        setPendingSessionId(session.id);
+        setPendingHash(uploadData.binary_hash);
+        setUploadText('');
+        return;
+      }
+
+      // Regular binary: upload directly
       setUploadText('Uploading binary...');
       const formData = new FormData();
       formData.append('file', file);
@@ -92,6 +117,29 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onOpenSession, onGoT
     } catch (err: any) {
       setUploadError(err.message || String(err));
       setUploading(false);
+    }
+  };
+
+  const finalizeZipSession = async (primaryFile: string) => {
+    if (!pendingSessionId) return;
+    try {
+      // Update session binary_path to the chosen file and finalize hash
+      await fetch(`${API}/sessions/${pendingSessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: sessionName.trim() || `${primaryFile} @ ${new Date().toLocaleString()}` }),
+      });
+      await fetch(`${API}/sessions/upload/${pendingSessionId}/finalize?binary_hash=${pendingHash}`, {
+        method: 'PATCH',
+      });
+      setExtractedFiles([]);
+      setPendingSessionId(null);
+      setPendingHash('');
+      setShowUpload(false);
+      setSessionName('');
+      fetchSessions();
+    } catch (err: any) {
+      setUploadError(err.message || String(err));
     }
   };
 
@@ -190,7 +238,7 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onOpenSession, onGoT
             </button>
             <button
               className="btn-primary sessions-new-btn"
-              onClick={() => { setShowUpload(true); setUploadError(''); setSessionName(''); }}
+              onClick={() => { setShowUpload(true); setUploadError(''); setSessionName(''); setExtractedFiles([]); setPendingSessionId(null); }}
             >
               <Plus size={15} /> New Analysis
             </button>
@@ -202,7 +250,7 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onOpenSession, onGoT
           <div className="glass-panel animate-fade-in sessions-upload-panel">
             <div className="sessions-upload-header">
               <h3>New Analysis Session</h3>
-              <button className="sessions-close-btn" onClick={() => setShowUpload(false)}>
+              <button className="sessions-close-btn" onClick={() => { setShowUpload(false); setExtractedFiles([]); setPendingSessionId(null); }}>
                 <X size={18} />
               </button>
             </div>
@@ -248,6 +296,27 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onOpenSession, onGoT
               </div>
               {!uploading && <div className="sessions-dropzone-hint">or click to browse</div>}
             </div>
+
+            {/* ZIP file picker: shown after extraction when user must pick primary binary */}
+            {extractedFiles.length > 0 && (
+              <div className="animate-fade-in" style={{ marginTop: '1rem' }}>
+                <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
+                  {extractedFiles.length} file{extractedFiles.length !== 1 ? 's' : ''} extracted. Select the primary binary to analyze:
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '200px', overflowY: 'auto' }}>
+                  {extractedFiles.map(f => (
+                    <button
+                      key={f}
+                      className="sessions-action-btn sessions-action-btn-primary"
+                      style={{ textAlign: 'left', padding: '0.5rem 0.75rem', fontSize: '0.85rem', fontFamily: 'monospace' }}
+                      onClick={() => finalizeZipSession(f)}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {uploadError && (
               <div className="animate-fade-in sessions-upload-error">{uploadError}</div>

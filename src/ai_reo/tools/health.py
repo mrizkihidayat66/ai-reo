@@ -47,7 +47,11 @@ class ToolHealthService:
             sessions_dir.mkdir(parents=True, exist_ok=True)
             report["sessions_dir"] = {"ok": True, "path": str(sessions_dir)}
 
+            # Ensure the persistent scripts directory exists (user-generated scripts)
+            Path(settings.tools.scripts_dir).expanduser().resolve().mkdir(parents=True, exist_ok=True)
+
             from ai_reo.tools.docker_exec import docker_executor
+
             client = docker_executor.client
             if not client:
                 report["docker"] = {"ok": False, "error": "Docker client not initialized"}
@@ -73,15 +77,22 @@ class ToolHealthService:
     async def _build_local_image_if_supported(self, tool_name: str, tool: DockerBasedTool) -> bool:
         """Build known local images when they are not published to Docker Hub."""
         image = tool.docker_image
+        # Maps image tag to its tool subdirectory under docker/<tool>/
         local_image_map = {
-            "ai-reo/objdump:latest": "docker/Dockerfile.objdump",
-            "ai-reo/angr:latest": "docker/Dockerfile.angr",
-            "ai-reo/upx:latest": "docker/Dockerfile.upx",
-            "ai-reo/capa:latest": "docker/Dockerfile.capa",
-            "ai-reo/yara:latest": "docker/Dockerfile.yara",
+            "ai-reo/objdump:latest":   "objdump",
+            "ai-reo/angr:latest":      "angr",
+            "ai-reo/upx:latest":       "upx",
+            "ai-reo/capa:latest":      "capa",
+            "ai-reo/yara:latest":      "yara",
+            "ai-reo/die:latest":       "die",
+            "ai-reo/lief:latest":      "lief",
+            "ai-reo/checksec:latest":  "checksec",
+            "ai-reo/unipacker:latest": "unipacker",
+            "ai-reo/floss:latest":     "floss",
+            "ai-reo/binwalk:latest":   "binwalk",
         }
-        dockerfile = local_image_map.get(image)
-        if dockerfile is None:
+        tool_dir = local_image_map.get(image)
+        if tool_dir is None:
             return False
 
         try:
@@ -90,11 +101,13 @@ class ToolHealthService:
             if not docker_executor.client:
                 return False
 
+            # Build context is the tool's own directory — keeps context small
             project_root = Path(__file__).resolve().parents[3]
-            logger.info("Tool %s: building local image %s...", tool_name, image)
+            context = project_root / "docker" / tool_dir
+            logger.info("Tool %s: building local image %s from %s...", tool_name, image, context)
             docker_executor.client.images.build(
-                path=str(project_root),
-                dockerfile=dockerfile,
+                path=str(context),
+                dockerfile="Dockerfile",
                 tag=image,
                 rm=True,
             )

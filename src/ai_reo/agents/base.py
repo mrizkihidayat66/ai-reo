@@ -18,8 +18,10 @@ from ai_reo.tools.registry import tool_registry
 
 logger = logging.getLogger(__name__)
 
-# Maximum tool-call rounds per step to prevent infinite tool loops
-MAX_TOOL_ROUNDS = 10
+from ai_reo.config import settings
+
+# Maximum tool-call rounds per step — configurable via AI_REO_MAX_TOOL_ROUNDS
+MAX_TOOL_ROUNDS: int = settings.tools.max_tool_rounds
 
 
 class BaseAgent:
@@ -218,10 +220,48 @@ class BaseAgent:
                                 "type": "tool_result",
                                 "agent": self.role_name,
                                 "tool": tool_name,
-                                "result_preview": result_str[:500],
+                                "result_preview": result_str[:8000],
                             })
                         except Exception:
                             pass
+
+                    # Persist tool execution to DB so it appears in exports and history
+                    try:
+                        from ai_reo.db.engine import get_db_session
+                        from ai_reo.db.repositories import ToolExecutionRepository
+
+                        try:
+                            tool_kwargs = json.loads(tc.function.arguments)
+                        except Exception:
+                            tool_kwargs = {}
+
+                        try:
+                            result_data = json.loads(result_str)
+                        except Exception:
+                            result_data = {}
+
+                        stdout = str(result_data.get("output", result_data.get("stdout", ""))) if result_data else result_str
+                        stderr = str(result_data.get("error", result_data.get("stderr", ""))) if result_data else ""
+                        raw_exit = result_data.get("exit_code") if result_data else None
+                        if raw_exit is not None:
+                            exit_code = int(raw_exit)
+                        elif "error" in (result_data or {}):
+                            exit_code = 1
+                        else:
+                            exit_code = 0
+
+                        with get_db_session() as _db:
+                            ToolExecutionRepository(_db).log_execution(
+                                session_id=session_id,
+                                tool_name=tool_name,
+                                invoked_by=self.role_name,
+                                command=tool_kwargs,
+                                stdout=stdout[:4000],
+                                stderr=stderr[:2000],
+                                exit_code=exit_code,
+                            )
+                    except Exception:
+                        logger.debug("Failed to log tool execution for %s", tool_name)
 
                 logger.debug(
                     "Agent %s: tool round %d — looping back for synthesis",
@@ -240,7 +280,10 @@ class BaseAgent:
                 "Agent %s hit MAX_TOOL_ROUNDS (%d), forcing completion",
                 self.role_name, MAX_TOOL_ROUNDS,
             )
-            content = content or "Maximum tool execution rounds reached. Returning current findings."
+            content = content or (
+                f"I've reached the tool-use limit ({MAX_TOOL_ROUNDS} rounds) for this step. "
+                "The orchestrator will decide whether to continue the investigation or compile a final report."
+            )
             context.add_message("assistant", content)
 
         # ── Parse structured output ──────────────────────────────────

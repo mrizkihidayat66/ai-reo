@@ -295,7 +295,14 @@ button {
   gap: 0.4rem;
 }
 
-.dashboard-input-bar { padding: 1rem; }
+.dashboard-input-bar { padding: 1rem; position: relative; }
+.dashboard-textarea { resize: none; min-height: 42px; max-height: 120px; overflow-y: auto; line-height: 1.4; padding-top: 0.55rem; padding-bottom: 0.55rem; }
+.slash-menu { position: absolute; bottom: calc(100% + 0.5rem); left: 1rem; right: 1rem; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-lg); overflow: hidden; box-shadow: 0 -8px 24px rgba(0,0,0,0.4); z-index: 100; max-height: 320px; overflow-y: auto; }
+.slash-menu-item { display: flex; align-items: center; gap: 1rem; padding: 0.55rem 1rem; width: 100%; background: transparent; color: var(--text-primary); border: none; border-bottom: 1px solid var(--border-color); cursor: pointer; text-align: left; transition: background 0.15s; }
+.slash-menu-item:last-child { border-bottom: none; }
+.slash-menu-item:hover, .slash-menu-item:focus { background: rgba(92,111,255,0.12); outline: none; }
+.slash-menu-cmd { font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; color: var(--accent-primary); min-width: 120px; }
+.slash-menu-desc { font-size: 0.82rem; color: var(--text-secondary); }
 
 .dashboard-input-form { display: flex; gap: 1rem; }
 
@@ -987,6 +994,17 @@ button {
   font-size: 0.68rem; color: var(--text-muted); font-style: italic;
   margin-left: 0.4rem; max-width: 280px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Analysis complete badge */
+.feed-analysis-complete {
+  padding: 0.5rem 0.9rem;
+  font-size: 0.78rem; color: var(--success);
+  border-left: 2px solid var(--success);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: rgba(16, 185, 129, 0.07);
+  margin-top: 0.25rem;
+  font-weight: 500;
 }
 
 /* Orchestrator routing card */

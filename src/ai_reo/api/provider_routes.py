@@ -58,6 +58,9 @@ def create_provider(req: ProviderCreateRequest) -> ProviderResponse:
                 models=req.models,
                 selected_model=req.selected_model,
                 enabled=req.enabled,
+                temperature=req.temperature,
+                max_tokens=req.max_tokens,
+                request_timeout=req.request_timeout,
             )
             return _to_response(cfg)
 
@@ -70,6 +73,9 @@ def create_provider(req: ProviderCreateRequest) -> ProviderResponse:
         models=req.models,
         selected_model=req.selected_model,
         enabled=req.enabled,
+        temperature=req.temperature,
+        max_tokens=req.max_tokens,
+        request_timeout=req.request_timeout,
     )
     llm_manager.register_provider(cfg)
     return _to_response(cfg)

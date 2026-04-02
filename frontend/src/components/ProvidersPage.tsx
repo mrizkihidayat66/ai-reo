@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Plus, X, CheckCircle, XCircle, Loader, ToggleLeft, ToggleRight,
-  Trash2, ChevronRight, Zap, Globe, Server, Cpu, Tag
+  Trash2, ChevronRight, Zap, Globe, Server, Cpu, Tag, Pencil
 } from 'lucide-react';
 import { useProviders } from '../context/ProvidersContext';
 import type { ProviderConfig, TestResult } from '../context/ProvidersContext';
@@ -195,21 +195,30 @@ const TagsInput: React.FC<TagsInputProps> = ({ tags, onChange, placeholder = 'Ad
 interface AddModalProps {
   onClose: () => void;
   onAdded: () => void;
+  editingProvider?: ProviderConfig | null;
 }
 
-const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded }) => {
-  const { addProvider, testProvider } = useProviders();
-  const [step, setStep] = useState<'pick' | 'configure'>('pick');
-  const [ptype, setPtype] = useState<string>('');
-  const [displayName, setDisplayName] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [models, setModels] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState('auto');
+const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded, editingProvider }) => {
+  const { addProvider, testProvider, updateProvider } = useProviders();
+  const isEditing = !!editingProvider;
+  const [step, setStep] = useState<'pick' | 'configure'>(isEditing ? 'configure' : 'pick');
+  const [ptype, setPtype] = useState<string>(editingProvider?.provider_type ?? '');
+  const [displayName, setDisplayName] = useState(editingProvider?.display_name ?? '');
+  const [apiKey, setApiKey] = useState(editingProvider?.api_key ?? '');
+  const [baseUrl, setBaseUrl] = useState(editingProvider?.base_url ?? '');
+  const [models, setModels] = useState<string[]>(editingProvider?.models ?? []);
+  const [selectedModel, setSelectedModel] = useState(editingProvider?.selected_model ?? 'auto');
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [error, setError] = useState('');
+  // Track the id of the provider we already created so Test can be clicked
+  // multiple times without creating duplicates.
+  const [savedId, setSavedId] = useState<string | null>(editingProvider?.id ?? null);
+  // Advanced settings
+  const [temperature, setTemperature] = useState<string>(editingProvider?.temperature != null ? String(editingProvider.temperature) : '');
+  const [maxTokens, setMaxTokens] = useState<string>(editingProvider?.max_tokens != null ? String(editingProvider.max_tokens) : '');
+  const [requestTimeout, setRequestTimeout] = useState<string>(editingProvider?.request_timeout != null ? String(editingProvider.request_timeout) : '');
 
   const meta = ptype ? PROVIDER_TYPES[ptype] : null;
 
@@ -224,7 +233,25 @@ const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded }) => {
     setStep('configure');
   };
 
-  const doSave = async (): Promise<ProviderConfig | null> => {
+  const doSave = async (): Promise<string | null> => {
+    const advancedPayload: Record<string, any> = {};
+    if (temperature !== '') advancedPayload.temperature = parseFloat(temperature);
+    if (maxTokens !== '') advancedPayload.max_tokens = parseInt(maxTokens, 10);
+    if (requestTimeout !== '') advancedPayload.request_timeout = parseInt(requestTimeout, 10);
+
+    if (savedId) {
+      // Already created — just sync any config changes via PUT, no new provider.
+      await updateProvider(savedId, {
+        display_name: displayName,
+        api_key: apiKey,
+        base_url: baseUrl,
+        models,
+        selected_model: selectedModel,
+        enabled: true,
+        ...advancedPayload,
+      });
+      return savedId;
+    }
     const p = await addProvider({
       display_name: displayName,
       provider_type: ptype,
@@ -233,8 +260,10 @@ const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded }) => {
       models,
       selected_model: selectedModel,
       enabled: true,
+      ...advancedPayload,
     });
-    return p;
+    setSavedId(p.id);
+    return p.id;
   };
 
   const handleTest = async () => {
@@ -242,9 +271,9 @@ const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded }) => {
     setTesting(true);
     setTestResult(null);
     try {
-      const saved = await doSave();
-      if (!saved) return;
-      const result = await testProvider(saved.id);
+      const id = await doSave();
+      if (!id) return;
+      const result = await testProvider(id);
       setTestResult(result);
     } catch (err: any) {
       setError(err.message || String(err));
@@ -285,7 +314,7 @@ const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded }) => {
             {step === 'pick' ? 'Choose Provider Type' : (
               <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <span style={{ color: meta?.color }}>{meta?.icon}</span>
-                Configure {meta?.label}
+                {isEditing ? 'Edit' : 'Configure'} {meta?.label}
               </span>
             )}
           </h2>
@@ -395,6 +424,51 @@ const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded }) => {
               </select>
             </div>
 
+            {/* Advanced Settings */}
+            <details style={{ borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem' }}>
+              <summary style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', cursor: 'pointer', fontWeight: 600, marginBottom: '0.75rem', userSelect: 'none' }}>
+                Advanced Settings
+              </summary>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>Temperature (0.0 – 2.0)</label>
+                  <input
+                    className="input mono"
+                    type="number"
+                    min="0" max="2" step="0.05"
+                    placeholder="default"
+                    value={temperature}
+                    onChange={e => setTemperature(e.target.value)}
+                    style={{ width: '120px' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>Max Output Tokens</label>
+                  <input
+                    className="input mono"
+                    type="number"
+                    min="16" max="128000" step="1"
+                    placeholder="default"
+                    value={maxTokens}
+                    onChange={e => setMaxTokens(e.target.value)}
+                    style={{ width: '120px' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>Request Timeout (seconds)</label>
+                  <input
+                    className="input mono"
+                    type="number"
+                    min="5" max="600" step="1"
+                    placeholder="default"
+                    value={requestTimeout}
+                    onChange={e => setRequestTimeout(e.target.value)}
+                    style={{ width: '120px' }}
+                  />
+                </div>
+              </div>
+            </details>
+
             {/* Error */}
             {error && (
               <div style={{ color: 'var(--danger)', fontSize: '0.85rem', padding: '0.5rem 0.75rem', background: 'rgba(239,68,68,0.1)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(239,68,68,0.2)' }}>
@@ -421,13 +495,15 @@ const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded }) => {
 
             <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', marginTop: '0.25rem' }}>
               {/* Back — far left */}
-              <button
-                type="button"
-                onClick={() => { setStep('pick'); setTestResult(null); setError(''); }}
-                style={{ padding: '0.5rem 1rem', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', background: 'var(--bg-tertiary)', cursor: 'pointer', fontSize: '0.85rem' }}
-              >
-                ← Back
-              </button>
+              {!isEditing && (
+                <button
+                  type="button"
+                  onClick={() => { setStep('pick'); setTestResult(null); setError(''); }}
+                  style={{ padding: '0.5rem 1rem', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', background: 'var(--bg-tertiary)', cursor: 'pointer', fontSize: '0.85rem' }}
+                >
+                  ← Back
+                </button>
+              )}
 
               {/* Spacer */}
               <div style={{ flex: 1 }} />
@@ -463,7 +539,7 @@ const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded }) => {
                   ...(testResult?.ok ? { background: 'linear-gradient(135deg, var(--success), #059669)', border: 'none' } : {}),
                 }}
               >
-                {loading ? 'Saving…' : (testResult?.ok ? '✓ Add Provider' : 'Add Provider')}
+                {loading ? 'Saving…' : (testResult?.ok ? (isEditing ? '✓ Save Changes' : '✓ Add Provider') : (isEditing ? 'Save Changes' : 'Add Provider'))}
               </button>
             </div>
           </form>
@@ -479,13 +555,26 @@ const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded }) => {
 
 interface CardProps {
   provider: ProviderConfig;
+  onEdit: (provider: ProviderConfig) => void;
 }
 
-const ProviderCard: React.FC<CardProps> = ({ provider }) => {
+const ProviderCard: React.FC<CardProps> = ({ provider, onEdit }) => {
   const { testProvider, updateProvider, removeProvider } = useProviders();
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameValue, setNameValue] = useState(provider.display_name);
   const meta = PROVIDER_TYPES[provider.provider_type];
+
+  const handleNameSave = () => {
+    setEditingName(false);
+    const trimmed = nameValue.trim();
+    if (trimmed && trimmed !== provider.display_name) {
+      updateProvider(provider.id, { display_name: trimmed });
+    } else {
+      setNameValue(provider.display_name);
+    }
+  };
 
   const handleTest = async () => {
     setTesting(true);
@@ -525,7 +614,29 @@ const ProviderCard: React.FC<CardProps> = ({ provider }) => {
             {meta?.icon}
           </div>
           <div>
-            <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{provider.display_name}</div>
+            {editingName ? (
+              <input
+                className="input"
+                value={nameValue}
+                onChange={e => setNameValue(e.target.value)}
+                onBlur={handleNameSave}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleNameSave();
+                  if (e.key === 'Escape') { setEditingName(false); setNameValue(provider.display_name); }
+                }}
+                autoFocus
+                style={{ padding: '0.2rem 0.5rem', fontSize: '0.92rem', fontWeight: 600, width: '100%' }}
+              />
+            ) : (
+              <div
+                style={{ fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                onClick={() => setEditingName(true)}
+                title="Click to rename"
+              >
+                {provider.display_name}
+                <span style={{ opacity: 0.35, fontSize: '0.72rem' }}>✎</span>
+              </div>
+            )}
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.1rem', fontFamily: 'var(--font-mono)' }}>
               {provider.selected_model === 'auto' ? `auto → ${provider.models[0] ?? 'none'}` : provider.selected_model}
             </div>
@@ -539,6 +650,9 @@ const ProviderCard: React.FC<CardProps> = ({ provider }) => {
               ✓ Tested
             </span>
           )}
+          <button onClick={() => onEdit(provider)} title="Edit provider" style={{ color: 'var(--text-muted)', padding: '0.25rem', lineHeight: 0 }}>
+            <Pencil size={14} />
+          </button>
           <button onClick={toggleEnabled} title={provider.enabled ? 'Disable' : 'Enable'} style={{ color: provider.enabled ? 'var(--accent-primary)' : 'var(--text-muted)', lineHeight: 0 }}>
             {provider.enabled ? <ToggleRight size={28} /> : <ToggleLeft size={28} />}
           </button>
@@ -607,6 +721,7 @@ interface ProvidersPageProps {
 export const ProvidersPage: React.FC<ProvidersPageProps> = ({ onContinue }) => {
   const { providers, hasReadyProvider } = useProviders();
   const [showModal, setShowModal] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<ProviderConfig | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   return (
@@ -624,7 +739,7 @@ export const ProvidersPage: React.FC<ProvidersPageProps> = ({ onContinue }) => {
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <button
-            onClick={() => setShowModal(true)}
+            onClick={() => { setEditingProvider(null); setShowModal(true); }}
             className="btn-primary"
             style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.55rem 1.1rem' }}
           >
@@ -661,8 +776,8 @@ export const ProvidersPage: React.FC<ProvidersPageProps> = ({ onContinue }) => {
             </div>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1rem' }}>
-            {providers.map(p => <ProviderCard key={`${p.id}-${refreshKey}`} provider={p} />)}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
+            {providers.map(p => <ProviderCard key={`${p.id}-${refreshKey}`} provider={p} onEdit={(prov) => { setEditingProvider(prov); setShowModal(true); }} />)}
           </div>
         )}
 
@@ -673,7 +788,13 @@ export const ProvidersPage: React.FC<ProvidersPageProps> = ({ onContinue }) => {
         )}
       </div>
 
-      {showModal && <AddProviderModal onClose={() => setShowModal(false)} onAdded={() => setRefreshKey(k => k + 1)} />}
+      {showModal && (
+        <AddProviderModal
+          editingProvider={editingProvider}
+          onClose={() => { setShowModal(false); setEditingProvider(null); }}
+          onAdded={() => setRefreshKey(k => k + 1)}
+        />
+      )}
     </div>
   );
 };

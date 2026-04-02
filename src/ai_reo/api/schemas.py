@@ -60,6 +60,13 @@ class BinaryUploadResponse(BaseModel):
     size_bytes: int
 
 
+class ZipUploadResponse(BaseModel):
+    """Response after extracting an uploaded ZIP archive into the session binary directory."""
+    filenames: List[str]
+    binary_hash: str
+    total_size_bytes: int
+
+
 # ---------------------------------------------------------------------------
 # LLM Provider Management Schemas
 # ---------------------------------------------------------------------------
@@ -74,6 +81,10 @@ class ProviderCreateRequest(BaseModel):
     models: List[str] = []                  # Available model tags
     selected_model: str = "auto"            # "auto" or a specific model name
     enabled: bool = True
+    # Advanced settings
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    request_timeout: Optional[int] = None
 
 
 class ProviderUpdateRequest(BaseModel):
@@ -84,6 +95,10 @@ class ProviderUpdateRequest(BaseModel):
     models: Optional[List[str]] = None
     selected_model: Optional[str] = None
     enabled: Optional[bool] = None
+    # Advanced settings
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    request_timeout: Optional[int] = None
 
 
 class ProviderResponse(BaseModel):

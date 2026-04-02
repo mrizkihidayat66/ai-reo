@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 export interface LogMessage {
   id: string;
-  type: 'system' | 'agent_state_override' | 'agent_step' | 'chat_message' | 'tool_result' | 'tool_start' | 'tool_end' | 'error' | 'status' | 'pause_state';
+  type: 'system' | 'agent_state_override' | 'agent_step' | 'chat_message' | 'tool_result' | 'tool_start' | 'tool_end' | 'error' | 'status' | 'pause_state' | 'analysis_complete';
   timestamp: string;
   content: any;
 }

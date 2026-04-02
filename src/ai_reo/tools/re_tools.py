@@ -25,7 +25,12 @@ def _resolve_binary_path(session_id: str, filepath: str) -> Dict[str, Any] | Pat
         Path object if valid, or a dict with an error response.
     """
     sessions_root = Path(settings.tools.sessions_dir).resolve()
-    binary_path = (sessions_root / session_id / "binary" / filepath).resolve()
+    # Support both new workspace/ layout and old binary/ layout for backward compat
+    binary_path = (sessions_root / session_id / "workspace" / filepath).resolve()
+    if not binary_path.exists():
+        legacy = (sessions_root / session_id / "binary" / filepath).resolve()
+        if legacy.exists():
+            binary_path = legacy
 
     # Security: prevent path traversal
     if not str(binary_path).startswith(str(sessions_root)):
@@ -99,7 +104,7 @@ class Radare2Tool(DockerBasedTool):
             }
 
         # -q0 disables prompts, -c executes the command string
-        full_cmd = f'r2 -q0 -c "{cmd}" /mnt/staging/{session_id}/binary/{filepath}'
+        full_cmd = f'r2 -q0 -c "{cmd}" /mnt/staging/{session_id}/workspace/{filepath}'
         res = docker_executor.execute(self.docker_image, full_cmd)
 
         output = res["output"].strip()
@@ -165,7 +170,7 @@ class ObjdumpTool(DockerBasedTool):
                 "message": f"Docker image '{self.docker_image}' not available. Set up from the Tools page.",
             }
 
-        full_cmd = f"objdump {kwargs['options']} /mnt/staging/{session_id}/binary/{filepath}"
+        full_cmd = f"objdump {kwargs['options']} /mnt/staging/{session_id}/workspace/{filepath}"
         res = docker_executor.execute(self.docker_image, full_cmd)
 
         return {"exit_code": res["exit_code"], "output": res["output"]}
@@ -218,7 +223,7 @@ class ReadelfTool(DockerBasedTool):
                 "message": f"Docker image '{self.docker_image}' not available. Set up from the Tools page.",
             }
 
-        full_cmd = f"readelf {options} /mnt/staging/{session_id}/binary/{filepath}"
+        full_cmd = f"readelf {options} /mnt/staging/{session_id}/workspace/{filepath}"
         res = docker_executor.execute(self.docker_image, full_cmd)
         return {"exit_code": res["exit_code"], "output": res["output"]}
 
@@ -270,7 +275,7 @@ class NmTool(DockerBasedTool):
                 "message": f"Docker image '{self.docker_image}' not available. Set up from the Tools page.",
             }
 
-        full_cmd = f"nm {options} /mnt/staging/{session_id}/binary/{filepath}"
+        full_cmd = f"nm {options} /mnt/staging/{session_id}/workspace/{filepath}"
         res = docker_executor.execute(self.docker_image, full_cmd)
         return {"exit_code": res["exit_code"], "output": res["output"]}
 
@@ -321,7 +326,7 @@ class AngrTool(DockerBasedTool):
 
         analysis_script = (
             "import json, angr; "
-            f"proj = angr.Project('/mnt/staging/{session_id}/binary/{filepath}', auto_load_libs=False); "
+            f"proj = angr.Project('/mnt/staging/{session_id}/workspace/{filepath}', auto_load_libs=False); "
             "cfg = proj.analyses.CFGFast(normalize=True); "
             "funcs = list(cfg.functions.values()); "
             "imports = sorted(list(getattr(proj.loader.main_object, 'imports', {}).keys()))[:100]; "
@@ -403,7 +408,7 @@ class UpxTool(DockerBasedTool):
 
         if mode == "decompress":
             output_path = kwargs.get("output_path") or f"{filepath}.unpacked"
-            full_cmd = f"cp /mnt/staging/{session_id}/binary/{filepath} /mnt/staging/{output_path} && upx -d /mnt/staging/{output_path}"
+            full_cmd = f"cp /mnt/staging/{session_id}/workspace/{filepath} /mnt/staging/{output_path} && upx -d /mnt/staging/{output_path}"
             res = docker_executor.execute(self.docker_image, full_cmd, timeout=180)
             return {
                 "exit_code": res["exit_code"],
@@ -411,7 +416,7 @@ class UpxTool(DockerBasedTool):
                 "output_path": output_path,
             }
 
-        full_cmd = f"upx -t /mnt/staging/{session_id}/binary/{filepath}"
+        full_cmd = f"upx -t /mnt/staging/{session_id}/workspace/{filepath}"
         res = docker_executor.execute(self.docker_image, full_cmd, timeout=120)
         return {"exit_code": res["exit_code"], "output": res["output"]}
 
@@ -461,7 +466,7 @@ class CapaTool(DockerBasedTool):
                 "message": f"Docker image '{self.docker_image}' not available. Set up from the Tools page.",
             }
 
-        full_cmd = f"capa --json /mnt/staging/{session_id}/binary/{filepath}"
+        full_cmd = f"capa --json -r /opt/capa-rules /mnt/staging/{session_id}/workspace/{filepath}"
         res = docker_executor.execute(self.docker_image, full_cmd, timeout=300)
 
         output = res["output"].strip()
@@ -546,7 +551,7 @@ class YaraTool(DockerBasedTool):
         rules_file = staging_dir / f"yara_rules_{session_id}.yar"
         try:
             rules_file.write_text(rules_text, encoding="utf-8")
-            full_cmd = f"yara /mnt/staging/yara_rules_{session_id}.yar /mnt/staging/{session_id}/binary/{filepath}"
+            full_cmd = f"yara /mnt/staging/yara_rules_{session_id}.yar /mnt/staging/{session_id}/workspace/{filepath}"
             res = docker_executor.execute(self.docker_image, full_cmd, timeout=60)
             return {"exit_code": res["exit_code"], "output": res["output"]}
         finally:
@@ -607,7 +612,7 @@ class GhidraHeadlessTool(DockerBasedTool):
 
         cmd = (
             f"analyzeHeadless /tmp tmp_project "
-            f"-import /mnt/staging/{session_id}/binary/{filepath} "
+            f"-import /mnt/staging/{session_id}/workspace/{filepath} "
             f"-postScript /mnt/staging/{script} "
             f"-deleteProject"
         )
@@ -615,3 +620,374 @@ class GhidraHeadlessTool(DockerBasedTool):
         res = docker_executor.execute(self.docker_image, cmd, timeout=300)
 
         return {"exit_code": res["exit_code"], "output": res["output"]}
+
+
+class DieTool(DockerBasedTool):
+    """Detect-It-Easy (DIE) packer/compiler/protector identification tool."""
+
+    @property
+    def name(self) -> str:
+        return "die"
+
+    @property
+    def docker_image(self) -> str:
+        return "ai-reo/die:latest"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Run Detect-It-Easy to identify packers, compilers, protectors, and obfuscators "
+            "used in a binary. Returns structured JSON with detected signatures and confidence."
+        )
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "filepath": {
+                    "type": "string",
+                    "description": "Relative path to target binary inside the session binary dir",
+                },
+            },
+            "required": ["filepath"],
+            "additionalProperties": False,
+        }
+
+    async def execute(self, session_id: str, **kwargs: Any) -> Any:
+        filepath = kwargs["filepath"]
+
+        resolved = _resolve_binary_path(session_id, filepath)
+        if isinstance(resolved, dict):
+            return resolved
+
+        if not self.is_ready():
+            return {
+                "error": "TOOL_NOT_READY",
+                "message": f"Docker image '{self.docker_image}' not available. Set up from the Tools page.",
+            }
+
+        cmd = f"diec --json /mnt/staging/{session_id}/workspace/{filepath}"
+        res = docker_executor.execute(self.docker_image, cmd, timeout=60)
+
+        output = res["output"].strip()
+        if res["exit_code"] != 0:
+            return {"error": output, "exit_code": res["exit_code"]}
+
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError:
+            return {"output": output}
+
+
+class LiefTool(DockerBasedTool):
+    """LIEF-based binary parser for deep PE/ELF/Mach-O structural analysis."""
+
+    @property
+    def name(self) -> str:
+        return "lief"
+
+    @property
+    def docker_image(self) -> str:
+        return "ai-reo/lief:latest"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Parse a PE, ELF, or Mach-O binary with LIEF. Returns sections, imports, exports, "
+            "TLS callbacks, resources, checksums, and signature information as structured JSON."
+        )
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "filepath": {
+                    "type": "string",
+                    "description": "Relative path to target binary inside the session binary dir",
+                },
+                "sections_only": {
+                    "type": "boolean",
+                    "description": "Return only section info (smaller output). Default false.",
+                    "default": False,
+                },
+            },
+            "required": ["filepath"],
+            "additionalProperties": False,
+        }
+
+    async def execute(self, session_id: str, **kwargs: Any) -> Any:
+        filepath = kwargs["filepath"]
+        sections_only = bool(kwargs.get("sections_only", False))
+
+        resolved = _resolve_binary_path(session_id, filepath)
+        if isinstance(resolved, dict):
+            return resolved
+
+        if not self.is_ready():
+            return {
+                "error": "TOOL_NOT_READY",
+                "message": f"Docker image '{self.docker_image}' not available. Set up from the Tools page.",
+            }
+
+        flag = "--sections-only" if sections_only else "--full"
+        cmd = f"python3 /app/lief_parse.py {flag} /mnt/staging/{session_id}/workspace/{filepath}"
+        res = docker_executor.execute(self.docker_image, cmd, timeout=60)
+
+        output = res["output"].strip()
+        if res["exit_code"] != 0:
+            return {"error": output, "exit_code": res["exit_code"]}
+
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError:
+            return {"output": output}
+
+
+class FlossTool(DockerBasedTool):
+    """FLOSS — FireEye Labs Obfuscated String Solver for deobfuscated string extraction."""
+
+    @property
+    def name(self) -> str:
+        return "floss"
+
+    @property
+    def docker_image(self) -> str:
+        # Local image built from docker/floss/Dockerfile during tool setup.
+        return "ai-reo/floss:latest"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Run FLOSS (Mandiant) to extract statically-defined, stack-based, and decoded strings "
+            "from a binary — including strings hidden by encoding or obfuscation. "
+            "More powerful than plain strings extraction for packed/obfuscated malware."
+        )
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "filepath": {
+                    "type": "string",
+                    "description": "Relative path to target binary inside the session binary dir",
+                },
+            },
+            "required": ["filepath"],
+            "additionalProperties": False,
+        }
+
+    async def execute(self, session_id: str, **kwargs: Any) -> Any:
+        filepath = kwargs["filepath"]
+
+        resolved = _resolve_binary_path(session_id, filepath)
+        if isinstance(resolved, dict):
+            return resolved
+
+        if not self.is_ready():
+            return {
+                "error": "TOOL_NOT_READY",
+                "message": f"Docker image '{self.docker_image}' not available. Set up from the Tools page.",
+            }
+
+        cmd = f"floss --json /mnt/staging/{session_id}/workspace/{filepath}"
+        res = docker_executor.execute(self.docker_image, cmd, timeout=300)
+
+        output = res["output"].strip()
+        if res["exit_code"] not in (0, 1):
+            return {"error": output, "exit_code": res["exit_code"]}
+
+        try:
+            data = json.loads(output)
+            return {
+                "static_strings": data.get("strings", {}).get("static_strings", [])[:200],
+                "stack_strings": data.get("strings", {}).get("stack_strings", [])[:100],
+                "decoded_strings": data.get("strings", {}).get("decoded_strings", [])[:100],
+                "meta": data.get("metadata", {}),
+            }
+        except (json.JSONDecodeError, KeyError):
+            return {"output": output[:4000]}
+
+
+class BinwalkTool(DockerBasedTool):
+    """Binwalk firmware and archive analysis with entropy + extraction."""
+
+    @property
+    def name(self) -> str:
+        return "binwalk"
+
+    @property
+    def docker_image(self) -> str:
+        # Local image built from docker/binwalk/Dockerfile during tool setup.
+        return "ai-reo/binwalk:latest"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Run Binwalk to scan a binary for embedded files, compressed archives, and firmware "
+            "signatures, plus generate an entropy graph. Ideal for firmware analysis and "
+            "detecting embedded files or compression within a binary."
+        )
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "filepath": {
+                    "type": "string",
+                    "description": "Relative path to target binary inside the session binary dir",
+                },
+                "extract": {
+                    "type": "boolean",
+                    "description": "If true, attempt to extract embedded files. Default false.",
+                    "default": False,
+                },
+            },
+            "required": ["filepath"],
+            "additionalProperties": False,
+        }
+
+    async def execute(self, session_id: str, **kwargs: Any) -> Any:
+        filepath = kwargs["filepath"]
+        extract = bool(kwargs.get("extract", False))
+
+        resolved = _resolve_binary_path(session_id, filepath)
+        if isinstance(resolved, dict):
+            return resolved
+
+        if not self.is_ready():
+            return {
+                "error": "TOOL_NOT_READY",
+                "message": f"Docker image '{self.docker_image}' not available. Set up from the Tools page.",
+            }
+
+        flags = "-e -M" if extract else ""
+        cmd = f"binwalk {flags} /mnt/staging/{session_id}/workspace/{filepath}"
+        res = docker_executor.execute(self.docker_image, cmd, timeout=120)
+        return {"exit_code": res["exit_code"], "output": res["output"][:6000]}
+
+
+class CheksecTool(DockerBasedTool):
+    """Checksec — report binary security mitigations (PIE, NX, canary, RELRO, ASLR)."""
+
+    @property
+    def name(self) -> str:
+        return "checksec"
+
+    @property
+    def docker_image(self) -> str:
+        return "ai-reo/checksec:latest"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Check binary security mitigations: PIE (position-independent executable), "
+            "NX/DEP (non-executable stack), Stack Canary, RELRO (relocation read-only), "
+            "and Fortify Source. Essential for vulnerability research."
+        )
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "filepath": {
+                    "type": "string",
+                    "description": "Relative path to target binary inside the session binary dir",
+                },
+            },
+            "required": ["filepath"],
+            "additionalProperties": False,
+        }
+
+    async def execute(self, session_id: str, **kwargs: Any) -> Any:
+        filepath = kwargs["filepath"]
+
+        resolved = _resolve_binary_path(session_id, filepath)
+        if isinstance(resolved, dict):
+            return resolved
+
+        if not self.is_ready():
+            return {
+                "error": "TOOL_NOT_READY",
+                "message": f"Docker image '{self.docker_image}' not available. Set up from the Tools page.",
+            }
+
+        cmd = f"checksec --format=json --file=/mnt/staging/{session_id}/workspace/{filepath}"
+        res = docker_executor.execute(self.docker_image, cmd, timeout=30)
+
+        output = res["output"].strip()
+        if res["exit_code"] != 0:
+            return {"error": output, "exit_code": res["exit_code"]}
+
+        try:
+            data = json.loads(output)
+            # checksec.sh wraps results under the binary path as the top-level key;
+            # extract the inner dict for a cleaner agent-facing response.
+            if isinstance(data, dict):
+                for val in data.values():
+                    if isinstance(val, dict):
+                        return val
+            return data
+        except json.JSONDecodeError:
+            return {"output": output}
+
+
+class UnipackerTool(DockerBasedTool):
+    """Unipacker — emulation-based Windows PE generic unpacker."""
+
+    @property
+    def name(self) -> str:
+        return "unipacker"
+
+    @property
+    def docker_image(self) -> str:
+        return "ai-reo/unipacker:latest"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Attempt to unpack a Windows PE binary using Unipacker (emulation-based). "
+            "Supports many PE packers (UPX, MPRESS, PEtite, ASPack, etc.). "
+            "Writes unpacked binary to the session staging directory."
+        )
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "filepath": {
+                    "type": "string",
+                    "description": "Relative path to target binary inside the session binary dir",
+                },
+                "output_filename": {
+                    "type": "string",
+                    "description": "Filename to write the unpacked binary to (default: <name>_unpacked.exe)",
+                },
+            },
+            "required": ["filepath"],
+            "additionalProperties": False,
+        }
+
+    async def execute(self, session_id: str, **kwargs: Any) -> Any:
+        import os as _os
+        filepath = kwargs["filepath"]
+        base_name = _os.path.splitext(_os.path.basename(filepath))[0]
+        output_filename = kwargs.get("output_filename") or f"{base_name}_unpacked.exe"
+
+        resolved = _resolve_binary_path(session_id, filepath)
+        if isinstance(resolved, dict):
+            return resolved
+
+        if not self.is_ready():
+            return {
+                "error": "TOOL_NOT_READY",
+                "message": f"Docker image '{self.docker_image}' not available. Set up from the Tools page.",
+            }
+
+        out_path = f"/mnt/staging/{session_id}/workspace/{output_filename}"
+        cmd = f"unipacker -d /mnt/staging/{session_id}/workspace/{filepath} -o {out_path}"
+        res = docker_executor.execute(self.docker_image, cmd, timeout=120)
+        return {
+            "exit_code": res["exit_code"],
+            "output": res["output"][:3000],
+            "output_file": output_filename,
+        }

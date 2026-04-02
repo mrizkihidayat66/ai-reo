@@ -1,59 +1,75 @@
-"""Engine for loading and rendering JSON-based prompt templates."""
+"""Agent prompt engine — reads Markdown instruction files from agents_dir.
 
-import json
+Each agent has a dedicated ``<name>.md`` file in the configured ``agents_dir``
+(defaults to the bundled ``agents/`` directory at the repo root).
+
+File format:
+    ---
+    name: static_analyst
+    version: "2.1"
+    description: ...
+    when_to_use: |
+      ...
+    ---
+
+    <system prompt body with {placeholder} variables>
+
+To customise an agent, edit (or replace) the corresponding ``.md`` file,
+or point ``AI_REO_AGENTS_DIR`` to a directory containing your overrides.
+"""
+
+import re
+import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
+logger = logging.getLogger(__name__)
 
-class SafeDict(dict):
-    """A dictionary that returns the original brace-wrapped key when missing.
-    Prevents str.format() from crashing if a template expects {kg_summary} but it's not provided.
-    """
-    def __missing__(self, key: str) -> str:
-        return f"{{{key}}}"
-
-
-_DEFAULT_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+_FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
 
 
 class PromptEngine:
-    """Loads prompt templates from the filesystem and renders them with variables."""
+    """Renders agent system prompts from Markdown instruction files.
 
-    def __init__(self, templates_dir: Path | None = None) -> None:
-        self.templates_dir = templates_dir or _DEFAULT_PROMPTS_DIR
-        self.templates: Dict[str, Dict[str, Any]] = {}
-        self._load_all()
+    Looks up ``agents_dir/<template_name>.md``, strips YAML frontmatter,
+    and substitutes ``{placeholder}`` variables in the body.
+    """
 
-    def _load_all(self) -> None:
-        if not self.templates_dir.exists():
-            return
-            
-        for json_file in self.templates_dir.glob("*.json"):
-            try:
-                with open(json_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if "name" in data:
-                        self.templates[data["name"]] = data
-            except (json.JSONDecodeError, OSError) as e:
-                # Log error gracefully in a full implementation
-                print(f"Failed to load prompt template {json_file}: {e}")
-
-    def get_template(self, template_name: str) -> Dict[str, Any]:
-        """Get the raw template definition dictionary."""
-        if template_name not in self.templates:
-            raise ValueError(f"Prompt template '{template_name}' not found in {self.templates_dir}")
-        return self.templates[template_name]
+    def _agents_dir(self) -> Path:
+        from ai_reo.config import settings
+        return Path(settings.tools.agents_dir).expanduser().resolve()
 
     def render(self, template_name: str, **kwargs: Any) -> str:
-        """Render the 'system' field of a specific template with context variables."""
-        template_data = self.get_template(template_name)
-        system_text = template_data.get("system", "")
-        
-        # Robust string replacement to avoid JSON bracket { } parsing crash from str.format()
+        """Render the system prompt for the named agent.
+
+        Args:
+            template_name: Agent name (e.g. ``'static_analyst'``).
+            **kwargs: Variables to substitute into ``{placeholder}`` tokens.
+
+        Returns:
+            The rendered system prompt string.
+
+        Raises:
+            FileNotFoundError: If the agent's ``.md`` file does not exist.
+        """
+        agents_dir = self._agents_dir()
+        md_file = agents_dir / f"{template_name}.md"
+
+        if not md_file.exists():
+            raise FileNotFoundError(
+                f"Agent instruction file '{template_name}.md' not found in {agents_dir}. "
+                "Ensure AI_REO_AGENTS_DIR points to the agents/ directory."
+            )
+
+        text = md_file.read_text(encoding="utf-8")
+        text = _FRONTMATTER_RE.sub("", text, count=1).strip()
+
         for k, v in kwargs.items():
-            system_text = system_text.replace(f"{{{k}}}", str(v))
-            
-        return system_text
+            text = text.replace(f"{{{k}}}", str(v))
+
+        return text
+
 
 # Global singleton
 prompt_engine = PromptEngine()
+

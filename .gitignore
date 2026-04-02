@@ -8,7 +8,8 @@
 .pytest_cache/
 
 # Runtime / temp data
-tmp/.ai-reo/
+tmp/**
+!tmp/CTF_Level5.exe
 *.db
 *.db-shm
 *.db-wal

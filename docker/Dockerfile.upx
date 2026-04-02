@@ -1,7 +1,0 @@
-FROM alpine:3.20
-
-# Alpine ships UPX in main repository and yields a very small image.
-RUN apk add --no-cache upx
-
-WORKDIR /mnt/staging
-CMD ["/bin/sh"]

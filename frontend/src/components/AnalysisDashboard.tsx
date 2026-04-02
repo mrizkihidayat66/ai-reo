@@ -5,7 +5,7 @@ import { useWs } from '../context/WebSocketContext';
 import { GraphPanel } from './GraphPanel';
 import {
   Activity, Terminal, Send, Pause, Play, Settings, ArrowLeft,
-  Wrench, AlertCircle, Brain, Code2, FileText, Zap, Bot,
+  Wrench, AlertCircle, Brain, Code2, FileText, Zap, Bot, Unlock, Bug,
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -22,6 +22,8 @@ const AGENT_STYLE: Record<string, { color: string; icon: React.ReactNode; label:
   orchestrator:    { color: '#8b5cf6', icon: <Brain size={14} />,    label: 'Orchestrator' },
   static_analyst:  { color: '#3b82f6', icon: <Code2 size={14} />,   label: 'Static Analyst' },
   dynamic_analyst: { color: '#f97316', icon: <Zap size={14} />,     label: 'Dynamic Analyst' },
+  deobfuscator:    { color: '#ec4899', icon: <Unlock size={14} />,   label: 'Deobfuscator' },
+  debugger:        { color: '#f59e0b', icon: <Bug size={14} />,      label: 'Debugger' },
   documentation:   { color: '#10b981', icon: <FileText size={14} />, label: 'Documentation' },
   'ai-reo':        { color: '#06b6d4', icon: <Bot size={14} />,     label: 'AI-REO' },
   direct_chat:     { color: '#06b6d4', icon: <Bot size={14} />,     label: 'AI-REO' },
@@ -75,10 +77,46 @@ const OrchestratorCard: React.FC<{ plan: any; timestamp?: string }> = ({ plan, t
   );
 };
 
+// ---------------------------------------------------------------------------
+// Slash command definitions
+// ---------------------------------------------------------------------------
+const SLASH_COMMANDS: Array<{
+  cmd: string; desc: string;
+  transform?: (args: string) => string;
+  localHandler?: boolean;
+}> = [
+  { cmd: '/ask',         desc: 'Ask a question — fast answer, no agents',     transform: (a) => a },
+  { cmd: '/analyze',     desc: 'Full multi-agent pipeline',                    transform: (a) => a || 'Perform comprehensive reverse engineering analysis.' },
+  { cmd: '/next',        desc: 'Suggest and execute the next best step',       transform: () => 'Based on findings so far, suggest and execute the most impactful next analysis step.' },
+  { cmd: '/static',      desc: 'Static analysis — structure, sections, entropy', transform: () => 'Perform comprehensive static analysis: file format, sections, headers, entropy, imports, exports, strings, and disassemble key functions.' },
+  { cmd: '/dynamic',     desc: 'Dynamic / runtime analysis',                   transform: () => 'Perform dynamic analysis to observe runtime behavior, API calls, and memory access patterns.' },
+  { cmd: '/strings',     desc: 'Extract and analyze printable strings',        transform: () => 'Extract all printable strings. Highlight interesting artifacts: URLs, credentials, error messages, function names, paths.' },
+  { cmd: '/imports',     desc: 'Analyze imported functions / libraries',       transform: () => 'Analyze all imported functions and libraries. Flag suspicious or security-relevant API calls.' },
+  { cmd: '/exports',     desc: 'List exported symbols',                        transform: () => 'List and analyze all exported symbols and functions.' },
+  { cmd: '/entrypoint',  desc: 'Locate and analyze entry point',              transform: () => 'Find the binary entry point (EP). Disassemble the first 50 instructions. Identify startup routines.' },
+  { cmd: '/disasm',      desc: 'Disassemble a function or region',            transform: (a) => a ? `Disassemble and explain: ${a}` : 'Disassemble and explain main() or the entry point function.' },
+  { cmd: '/decompile',   desc: 'Decompile to high-level pseudocode',          transform: (a) => a ? `Decompile to readable pseudocode: ${a}` : 'Decompile the most important functions using Ghidra.' },
+  { cmd: '/crypto',      desc: 'Detect cryptographic routines',               transform: () => 'Identify all cryptographic algorithms, constants, and routines in the binary.' },
+  { cmd: '/packer',      desc: 'Detect packing / obfuscation / DRM',          transform: () => 'Detect packing, compression, encryption, or protection. Check entropy, look for packer signatures (UPX, ASPACK, VMProtect, Themida, etc.), and report all indicators.' },
+  { cmd: '/unpack',      desc: 'Attempt to unpack / decompress',              transform: () => 'Attempt to unpack or decompress the binary. Try UPX decompression, locate the OEP, and analyze the unpacked payload.' },
+  { cmd: '/obfuscation', desc: 'Identify obfuscation techniques',             transform: () => 'Identify all obfuscation techniques: code flow, string encoding, junk code, opaque predicates, VM-based protection.' },
+  { cmd: '/vuln',        desc: 'Scan for vulnerabilities',                    transform: () => 'Search for potential vulnerabilities: buffer overflows, format strings, dangerous function calls, memory corruption patterns.' },
+  { cmd: '/logic',       desc: 'Analyze program logic / control flow',        transform: () => 'Map the main program logic: control flow graph, key decision branches, and execution paths.' },
+  { cmd: '/run',         desc: 'Execute a specific tool directly',            transform: (a) => `Execute this specific analysis and report results: ${a}` },
+  { cmd: '/script',      desc: 'Generate and save a reusable script',         transform: (a) => `Write, execute, and save a reusable analysis script for: ${a}. Use scripts_write to save it to the persistent shared scripts directory.` },
+  { cmd: '/tools',       desc: 'List available tools and status',             localHandler: true },
+  { cmd: '/agents',      desc: 'Show active agents',                          localHandler: true },
+  { cmd: '/stop',        desc: 'Pause analysis',                              localHandler: true },
+  { cmd: '/resume',      desc: 'Resume analysis',                             localHandler: true },
+  { cmd: '/documentation', desc: 'Generate detailed report of current analysis findings', transform: () => 'Generate a comprehensive documentation report summarizing all findings discovered so far. Include binary metadata, discovered functions, strings, imports, vulnerabilities, and an executive summary. Update the Knowledge Graph with any missing nodes.' },
+  { cmd: '/knowledge_import', desc: 'Import & merge a Knowledge Graph from an exported session', localHandler: true },
+];
+
 export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoToSettings, onGoToTools, onBackToSessions }) => {
   const { isConnected, logs, session, sendCommand, clearLogs } = useWs();
   const [goal, setGoal] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
+  const [analysisDone, setAnalysisDone] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
   const [userMessages, setUserMessages] = useState<{ id: string; text: string; ts: string }[]>([]);
@@ -86,19 +124,37 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
   const [currentGoal, setCurrentGoal] = useState<string | null>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const kgImportRef = useRef<HTMLInputElement>(null);
 
-  // Normalize a DB history row into the same shape as a live WS chat_message log entry
-  const normalizeHistoryEntry = (h: any) => ({
-    id: h.id,
-    type: 'chat_message' as const,
-    timestamp: h.timestamp ? new Date(h.timestamp).toLocaleTimeString() : '',
-    content: {
-      agent: h.agent,
-      content: h.response || '',
-      goal_completed: false,
-      findings_count: 0,
-    },
-  });
+  // Normalize a DB history row into the same shape as a live WS LogMessage entry
+  const normalizeHistoryEntry = (h: any): any => {
+    if (h.type === 'tool_result') {
+      return {
+        id: h.id,
+        type: 'tool_result' as const,
+        timestamp: h.timestamp ? new Date(h.timestamp).toLocaleTimeString() : '',
+        content: {
+          agent: h.agent,
+          tool: h.tool,
+          result_preview: h.result_preview || '',
+          exit_code: h.exit_code,
+        },
+      };
+    }
+    // Default: chat_message — agent field drives specific rendering (user/orchestrator/agent)
+    return {
+      id: h.id,
+      type: 'chat_message' as const,
+      timestamp: h.timestamp ? new Date(h.timestamp).toLocaleTimeString() : '',
+      content: {
+        agent: h.agent,
+        content: h.response || '',
+        goal_completed: false,
+        findings_count: 0,
+      },
+    };
+  };
 
   // Auto-scroll
   useEffect(() => {
@@ -138,50 +194,132 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
     }
   }, [logs]);
 
-  const handleAnalyze = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!goal.trim() || !session) return;
-
-    // Optimistic UI: show user message immediately as right-side bubble
-    const msg = { id: `user-${Date.now()}`, text: goal, ts: new Date().toLocaleTimeString() };
-    setUserMessages(prev => [...prev, msg]);
-
-    setAnalyzing(true);
+  // Drive completion from the analysis_complete WebSocket event so the
+  // indicator persists for the full pipeline duration (not just HTTP round-trip)
+  useEffect(() => {
+    const done = logs.find(l => l.type === 'analysis_complete');
+    if (!done || !analyzing) return;
+    setAnalyzing(false);
+    setAnalysisDone(true);
     setIsPaused(false);
-    setErrorBanner(null);
     setActiveAgent(null);
     setCurrentGoal(null);
-    const submittedGoal = goal;
-    setGoal('');
-
-    try {
-      await fetch(`${API}/sessions/${session}/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ goal: submittedGoal }),
-      });
-    } finally {
-      setAnalyzing(false);
-      setIsPaused(false);
-      setActiveAgent(null);
-      setCurrentGoal(null);
-      // Reload history (now includes user + all agent messages), then clear live state
+    if (session) {
       fetch(`${API}/sessions/${session}/history`)
         .then(r => r.ok ? r.json() : [])
-        .then(data => {
-          setHistory(data);
-          clearLogs();
-          setUserMessages([]);
-        })
+        .then(data => { setHistory(data); clearLogs(); setUserMessages([]); })
         .catch(() => {});
     }
-  };
+  }, [logs]);
 
   const handleTogglePause = () => {
     sendCommand('toggle_pause');
   };
 
-  const renderLogEntry = (log: any) => {
+  const handleKgImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !session) return;
+    e.target.value = '';
+    try {
+      const text = await file.text();
+      const graphData = JSON.parse(text);
+      const res = await fetch(`${API}/sessions/${session}/kg/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(graphData),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.detail || 'Import failed');
+      setUserMessages(prev => [...prev, {
+        id: `import-${Date.now()}`,
+        text: `[/knowledge_import] Imported ${result.imported} node(s) from ${file.name}. ${result.skipped} duplicate(s) skipped.`,
+        ts: new Date().toLocaleTimeString(),
+      }]);
+    } catch (err: any) {
+      setErrorBanner(`KG import failed: ${err.message}`);
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // Slash command & submission logic
+  // -------------------------------------------------------------------------
+
+  const submitGoal = async (goalText: string, displayText?: string) => {
+    if (!goalText.trim() || !session) return;
+    const displayMsg = displayText || goalText;
+    const msg = { id: `user-${Date.now()}`, text: displayMsg, ts: new Date().toLocaleTimeString() };
+    setUserMessages(prev => [...prev, msg]);
+    setAnalyzing(true);
+    setAnalysisDone(false);
+    setIsPaused(false);
+    setErrorBanner(null);
+    setActiveAgent(null);
+    setCurrentGoal(null);
+    setGoal('');
+    try {
+      const res = await fetch(`${API}/sessions/${session}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goal: goalText }),
+      });
+      if (!res.ok) {
+        // HTTP-level failure (e.g. 500): the WS event won't arrive, so reset manually
+        setAnalyzing(false);
+        setErrorBanner('Analysis failed. Check the server logs.');
+      }
+      // On success the analysis_complete WS event drives all completion state
+    } catch {
+      setAnalyzing(false);
+      setErrorBanner('Network error: could not reach the server.');
+    }
+  };
+
+  const parseAndSubmit = (rawInput: string) => {
+    const trimmed = rawInput.trim();
+    if (!trimmed || !session) return;
+
+    if (trimmed.startsWith('/')) {
+      const spaceIdx = trimmed.indexOf(' ');
+      const cmdPart = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
+      const argsPart = spaceIdx === -1 ? '' : trimmed.slice(spaceIdx + 1).trim();
+
+      const slashCmd = SLASH_COMMANDS.find(c => c.cmd === cmdPart);
+
+      // Local-only commands
+      if (slashCmd?.localHandler) {
+        if (cmdPart === '/stop')   { sendCommand('pause');  setGoal(''); return; }
+        if (cmdPart === '/resume') { sendCommand('resume'); setGoal(''); return; }
+        if (cmdPart === '/knowledge_import') {
+          setGoal('');
+          kgImportRef.current?.click();
+          return;
+        }
+        // /tools and /agents → turn into a question answered by direct_chat
+        const infoGoal =
+          cmdPart === '/tools'  ? 'List all available analysis tools, their purpose, and current readiness status.' :
+          cmdPart === '/agents' ? 'List the available analysis agents, their roles, and when each is used.' :
+          argsPart || trimmed;
+        submitGoal(infoGoal, trimmed);
+        return;
+      }
+
+      if (slashCmd?.transform) {
+        const transformed = slashCmd.transform(argsPart);
+        submitGoal(transformed || argsPart || trimmed, trimmed);
+        return;
+      }
+    }
+
+    submitGoal(trimmed);
+  };
+
+  const handleAnalyze = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!goal.trim() || !session || analyzing) return;
+    parseAndSubmit(goal);
+  };
+
+  const renderLogEntry = (log: LogEntry): React.ReactNode => {
     const { type, content } = log;
 
     if (type === 'agent_state_override') return null;
@@ -206,7 +344,6 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
           <div className="chat-msg chat-msg-user-bubble">
             <div className="chat-msg-header">
               <span className="chat-msg-agent" style={{ color: 'var(--accent-primary)' }}>You</span>
-              <span className="chat-msg-time">{log.timestamp}</span>
             </div>
             <div className="chat-msg-body">{rawContent}</div>
           </div>
@@ -233,19 +370,29 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
       if (!rawContent.trim()) return null;
 
       const style = getAgentStyle(agent);
+
+      // Auto-detect JSON responses and format them as code blocks
+      const trimmedContent = rawContent.trim();
+      const looksLikeJson = (trimmedContent.startsWith('{') || trimmedContent.startsWith('[')) && !trimmedContent.startsWith('```');
+      let displayContent = rawContent;
+      if (looksLikeJson) {
+        try {
+          displayContent = '```json\n' + JSON.stringify(JSON.parse(trimmedContent), null, 2) + '\n```';
+        } catch { /* leave as-is if not valid JSON */ }
+      }
+
       return (
         <div className="chat-msg" style={{ borderLeftColor: style.color }}>
           <div className="chat-msg-header">
             <span style={{ color: style.color }}>{style.icon}</span>
             <span className="chat-msg-agent" style={{ color: style.color }}>{style.label}</span>
-            <span className="chat-msg-time">{log.timestamp}</span>
-            {content?.goal_completed && <span className="chat-msg-badge chat-msg-badge-done">✓ Done</span>}
+            {content?.goal_completed && <span className="chat-msg-badge chat-msg-badge-done">Done</span>}
             {content?.findings_count > 0 && (
               <span className="chat-msg-badge chat-msg-badge-findings">+{content.findings_count} findings</span>
             )}
           </div>
           <div className="chat-msg-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{rawContent}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
           </div>
         </div>
       );
@@ -275,12 +422,22 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
 
     if (type === 'status') return null; // pause_state replaces old status
     if (type === 'error') return null; // handled by banner
+    if (type === 'analysis_complete') return null; // shown via analysisDone state
 
     return null;
   };
 
   return (
     <div className="dashboard animate-fade-in">
+
+      {/* Hidden file input for /knowledge_import */}
+      <input
+        ref={kgImportRef}
+        type="file"
+        accept=".json"
+        style={{ display: 'none' }}
+        onChange={handleKgImport}
+      />
 
       {/* Error Banner */}
       {errorBanner && (
@@ -366,12 +523,14 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
 
             {/* User messages (optimistic — right-side bubble) */}
             {userMessages.map(m => (
-              <div key={m.id} className="chat-msg chat-msg-user-bubble">
-                <div className="chat-msg-header">
-                  <span className="chat-msg-agent" style={{ color: 'var(--accent-primary)' }}>You</span>
-                  <span className="chat-msg-time">{m.ts}</span>
+              <div key={m.id} className="animate-fade-in feed-entry">
+                <span className="mono feed-timestamp">{m.ts}</span>
+                <div className="chat-msg chat-msg-user-bubble">
+                  <div className="chat-msg-header">
+                    <span className="chat-msg-agent" style={{ color: 'var(--accent-primary)' }}>You</span>
+                  </div>
+                  <div className="chat-msg-body">{m.text}</div>
                 </div>
-                <div className="chat-msg-body">{m.text}</div>
               </div>
             ))}
 
@@ -413,6 +572,13 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
                 </div>
               );
             })()}
+
+            {/* Analysis complete badge — shown after pipeline finishes, persists until next submit */}
+            {!analyzing && analysisDone && (
+              <div className="feed-analysis-complete animate-fade-in">
+                <span style={{ color: 'var(--success)' }}>&#10003;</span> Analysis complete — type a follow-up or new goal
+              </div>
+            )}
           </div>
         </div>
 
@@ -422,12 +588,43 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
 
       {/* Input Bar */}
       <div className="glass-panel dashboard-input-bar">
+        {/* Slash command menu */}
+        {goal.startsWith('/') && !analyzing && (() => {
+          const q = goal.toLowerCase();
+          const matches = SLASH_COMMANDS.filter(
+            c => c.cmd.startsWith(q) || c.aliases?.some(a => a.startsWith(q))
+          );
+          if (matches.length === 0) return null;
+          return (
+            <div className="slash-menu">
+              {matches.map(c => (
+                <button
+                  key={c.cmd}
+                  className="slash-menu-item"
+                  type="button"
+                  onMouseDown={e => { e.preventDefault(); setGoal(c.cmd + ' '); inputRef.current?.focus(); }}
+                >
+                  <span className="slash-menu-cmd">{c.cmd}</span>
+                  <span className="slash-menu-desc">{c.desc}</span>
+                </button>
+              ))}
+            </div>
+          );
+        })()}
         <form onSubmit={handleAnalyze} className="dashboard-input-form">
-          <input
-            className="input mono"
-            placeholder="Type a message or analysis goal..."
+          <textarea
+            ref={inputRef}
+            className="input mono dashboard-textarea"
+            placeholder="Type a message, goal, or /command…"
             value={goal}
+            rows={1}
             onChange={e => setGoal(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleAnalyze(e as unknown as React.FormEvent);
+              }
+            }}
             disabled={analyzing}
           />
           <button className="btn-primary dashboard-send-btn" type="submit" disabled={analyzing || !goal.trim()}>
