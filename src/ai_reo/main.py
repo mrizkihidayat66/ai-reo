@@ -103,8 +103,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Register all tools into the global registry
     from ai_reo.tools.registry import tool_registry
-    from ai_reo.tools.basic import FsReadTool, FsWriteTool, StringsExtractTool, BinaryInfoTool, EntropyAnalysisTool, HexDumpTool, FileTypeTool, SharedWriteTool, SharedListTool, BintropTool, PEFileTool
-    from ai_reo.tools.re_tools import Radare2Tool, ObjdumpTool, ReadelfTool, NmTool, AngrTool, UpxTool, CapaTool, YaraTool, GhidraHeadlessTool, DieTool, LiefTool, FlossTool, BinwalkTool, CheksecTool, UnipackerTool
+    from ai_reo.tools.basic import (
+        FsReadTool, FsWriteTool, StringsExtractTool, BinaryInfoTool,
+        EntropyAnalysisTool, HexDumpTool, FileTypeTool, SharedWriteTool,
+        SharedListTool, PEFileTool,
+    )
+    from ai_reo.tools.re_tools import (
+        Radare2Tool, ObjdumpTool, ReadelfTool, NmTool, AngrTool, UpxTool,
+        CapaTool, YaraTool, GhidraHeadlessTool, DieTool, LiefTool, FlossTool,
+        CheksecTool, UnipackerTool,
+        # New tools added in re-evaluation
+        CapeAnalysisTool, FridaTool, QilingTool, PeSieveTool, HollowsHunterTool,
+        UnlicenseTool, Volatility3Tool, JadxTool, ApktoolTool, ApkidTool, AflplusplusTool,
+    )
     tool_registry.register(FsReadTool())
     tool_registry.register(FsWriteTool())
     tool_registry.register(StringsExtractTool())
@@ -114,7 +125,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     tool_registry.register(FileTypeTool())
     tool_registry.register(SharedWriteTool())
     tool_registry.register(SharedListTool())
-    tool_registry.register(BintropTool())
     tool_registry.register(PEFileTool())
     tool_registry.register(Radare2Tool())
     tool_registry.register(ObjdumpTool())
@@ -128,9 +138,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     tool_registry.register(DieTool())
     tool_registry.register(LiefTool())
     tool_registry.register(FlossTool())
-    tool_registry.register(BinwalkTool())
     tool_registry.register(CheksecTool())
     tool_registry.register(UnipackerTool())
+    # New additions
+    tool_registry.register(CapeAnalysisTool())
+    tool_registry.register(FridaTool())
+    tool_registry.register(QilingTool())
+    tool_registry.register(PeSieveTool())
+    tool_registry.register(HollowsHunterTool())
+    tool_registry.register(UnlicenseTool())
+    tool_registry.register(Volatility3Tool())
+    tool_registry.register(JadxTool())
+    tool_registry.register(ApktoolTool())
+    tool_registry.register(ApkidTool())
+    tool_registry.register(AflplusplusTool())
     logger.info("Tool registry initialised with %d tools.", len(tool_registry._tools))
 
     yield  # hand off to the application
@@ -297,11 +318,13 @@ from ai_reo.api.routes import router as sessions_router, runs_router
 from ai_reo.api.provider_routes import router as providers_router
 from ai_reo.api.tool_routes import router as tools_router
 from ai_reo.api.skills_routes import router as skills_router
+from ai_reo.api.agents_routes import router as agents_router
 app.include_router(sessions_router)
 app.include_router(providers_router)
 app.include_router(runs_router)
 app.include_router(tools_router)
 app.include_router(skills_router)
+app.include_router(agents_router)
 
 
 @app.get("/", summary="API root information")

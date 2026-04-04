@@ -1,0 +1,40 @@
+# CAPE Sandbox (CAPEv2) reference docker-compose configuration.
+#
+# AI-REO communicates with CAPE via its REST API using CapeAnalysisTool.
+# Set AI_REO_TOOLS_CAPE_URL=http://localhost:8000 (or your CAPE host) in .env.
+#
+# To run a local CAPE instance, follow the official CAPEv2 documentation.
+# The official repository is: https://github.com/kevoreilly/CAPEv2
+#
+# A minimal single-node deployment can be started with:
+#   git clone https://github.com/kevoreilly/CAPEv2
+#   cd CAPEv2
+#   docker-compose up -d
+#
+# NOTE: CAPE requires nested virtualisation or bare-metal KVM support.
+# It will NOT work correctly inside a Docker-in-Docker environment or on
+# Windows hosts without WSL2 + KVM enabled.
+#
+# The compose file below is provided as a reference only — use the upstream
+# one from the CAPEv2 repository for production deployments.
+#
+# Reference: https://capev2.readthedocs.io/en/latest/installation/docker.html
+
+version: "3.9"
+
+services:
+  cape:
+    image: kevoreilly/capev2:latest
+    privileged: true
+    ports:
+      - "8000:8000"      # CAPE API
+      - "2042:2042"      # Cuckoo result server
+    volumes:
+      - cape_storage:/opt/CAPEv2/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - CAPE_HOST=0.0.0.0
+    restart: unless-stopped
+
+volumes:
+  cape_storage:

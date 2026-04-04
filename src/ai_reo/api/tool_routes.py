@@ -26,6 +26,7 @@ async def get_tools_status() -> Dict[str, Any]:
                 "image": s.image,
                 "image_available": s.image_available,
                 "error": s.error,
+                "description": s.description,
             }
             for name, s in status.items()
         },
@@ -84,9 +85,16 @@ async def test_tool(tool_name: str) -> Dict[str, Any]:
                     "tool": tool_name,
                     "error": f"Image '{tool.docker_image}' not pulled. Click Setup first.",
                 }
-            result = docker_executor.execute(tool.docker_image, "echo AI-REO-OK", timeout=15)
-            ok = "AI-REO-OK" in result.get("output", "")
-            return {"ok": ok, "tool": tool_name, "output": result.get("output", "")[:200]}
+            result = docker_executor.execute(
+                tool.docker_image,
+                tool.smoke_test_cmd if tool.smoke_test_cmd is not None else "echo AI-REO-OK",
+                timeout=30,
+            )
+            if tool.smoke_test_cmd is not None:
+                ok = result.get("exit_code", 1) == 0
+            else:
+                ok = "AI-REO-OK" in result.get("output", "")
+            return {"ok": ok, "tool": tool_name, "output": result.get("output", "")[:400]}
         except Exception as e:
             return {"ok": False, "tool": tool_name, "error": str(e)}
     else:

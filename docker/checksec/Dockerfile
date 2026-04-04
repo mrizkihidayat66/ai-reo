@@ -13,7 +13,7 @@ RUN apt-get update \
         file \
         curl \
         ca-certificates \
-    && curl -sSL https://raw.githubusercontent.com/slimm609/checksec.sh/main/checksec \
+    && curl --fail -sSL https://raw.githubusercontent.com/slimm609/checksec.sh/2.7.1/checksec \
        -o /usr/local/bin/checksec \
     && chmod +x /usr/local/bin/checksec \
     && rm -rf /var/lib/apt/lists/*

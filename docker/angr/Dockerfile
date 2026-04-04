@@ -10,7 +10,7 @@ RUN apt-get update \
         build-essential gcc g++ libffi-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "angr==9.2.119"
+RUN pip install --no-cache-dir angr
 
 WORKDIR /mnt/staging
 VOLUME ["/mnt/staging"]

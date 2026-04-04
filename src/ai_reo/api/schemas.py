@@ -38,6 +38,7 @@ class GraphExportResponse(BaseModel):
 class AnalyzeRequest(BaseModel):
     """Payload to instruct the Orchestrator with a new objective."""
     goal: str
+    mode: Optional[str] = None   # "continuation" bypasses intent classifier and goes direct to orchestrator
 
 
 class AnalyzeResponse(BaseModel):
@@ -65,6 +66,18 @@ class ZipUploadResponse(BaseModel):
     filenames: List[str]
     binary_hash: str
     total_size_bytes: int
+
+
+class KGBulkDeleteRequest(BaseModel):
+    """Payload for bulk-deleting KG nodes."""
+    node_ids: List[str]
+
+
+class KGDeleteEdgeRequest(BaseModel):
+    """Payload for deleting a specific edge from the KG."""
+    source_node_id: str
+    target_node_id: str
+    relationship: str
 
 
 # ---------------------------------------------------------------------------

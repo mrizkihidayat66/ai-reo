@@ -22,6 +22,8 @@ from ai_reo.api.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
     GraphExportResponse,
+    KGBulkDeleteRequest,
+    KGDeleteEdgeRequest,
     SessionCreateRequest,
     SessionRenameRequest,
     SessionResponse,
@@ -287,18 +289,24 @@ async def upload_zip(
         basename = Path(name).name
         if basename.startswith(".") or "__MACOSX" in name:
             continue
-
-        # Flatten: extract just the filename (ignore zip internal directory paths)
-        safe_name = Path(basename).name
-        if not safe_name:
+        if not basename:
             continue
 
-        dest = session_dir / safe_name
+        # Preserve the original directory structure from inside the ZIP.
+        # Sanitise each path component individually to block traversal attempts.
+        parts = Path(name).parts
+        safe_parts = [p for p in parts if p not in ("", ".", "..") and not p.startswith("/")]
+        if not safe_parts:
+            continue
+        relative_path = Path(*safe_parts)
+
+        dest = session_dir / relative_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
         file_data = zf.read(info.filename)
         total_size += len(file_data)
         sha256_hash.update(file_data)
         dest.write_bytes(file_data)
-        extracted.append(safe_name)
+        extracted.append(str(relative_path))
 
     zf.close()
 
@@ -453,6 +461,47 @@ def import_knowledge_graph(
     return {"imported": imported, "skipped": skipped, "session_id": session_id}
 
 
+@router.delete("/{session_id}/kg/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_kg_node(
+    session_id: str,
+    node_id: str,
+    svc: SessionService = Depends(get_session_service),
+    kg: KnowledgeGraphService = Depends(get_kg_service),
+):
+    """Delete a single KG node by ID (cascade-strips dangling edges)."""
+    svc.load_session(session_id)  # 404 if session missing
+    deleted = kg.delete_node(session_id, node_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found.")
+
+
+@router.post("/{session_id}/kg/nodes/bulk-delete")
+def bulk_delete_kg_nodes(
+    session_id: str,
+    req: KGBulkDeleteRequest,
+    svc: SessionService = Depends(get_session_service),
+    kg: KnowledgeGraphService = Depends(get_kg_service),
+) -> Dict[str, Any]:
+    """Delete multiple KG nodes in one request."""
+    svc.load_session(session_id)
+    count = kg.bulk_delete_nodes(session_id, req.node_ids)
+    return {"deleted": count, "session_id": session_id}
+
+
+@router.delete("/{session_id}/kg/edges", status_code=status.HTTP_204_NO_CONTENT)
+def delete_kg_edge(
+    session_id: str,
+    req: KGDeleteEdgeRequest,
+    svc: SessionService = Depends(get_session_service),
+    kg: KnowledgeGraphService = Depends(get_kg_service),
+):
+    """Remove a specific directed edge from the KG."""
+    svc.load_session(session_id)
+    deleted = kg.delete_edge(req.source_node_id, req.target_node_id, req.relationship)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Edge not found.")
+
+
 # ---------------------------------------------------------------------------
 # Analysis Pipeline
 # ---------------------------------------------------------------------------
@@ -492,9 +541,23 @@ async def analyze_session(
     # Build a summary of tools already run in previous invocations so agents
     # don't redundantly re-execute them.
     tool_history = tool_svc.get_history(session_id)
+    # Tools that succeeded at least once
     completed_tools = ", ".join(
         sorted({t.tool_name for t in tool_history if t.exit_code == 0})
     ) if tool_history else ""
+    # Tools that ONLY ever failed (every invocation had a non-zero exit code that
+    # typically means "this tool can't process this binary": 1, 2, 12, 127)
+    _PERM_FAIL_CODES = {1, 2, 12, 127}
+    failed_tool_counts: dict[str, int] = {}
+    failed_tool_total: dict[str, int] = {}
+    for t in (tool_history or []):
+        failed_tool_total[t.tool_name] = failed_tool_total.get(t.tool_name, 0) + 1
+        if t.exit_code in _PERM_FAIL_CODES:
+            failed_tool_counts[t.tool_name] = failed_tool_counts.get(t.tool_name, 0) + 1
+    permanently_failed_tools = ", ".join(sorted(
+        name for name, cnt in failed_tool_counts.items()
+        if cnt == failed_tool_total.get(name, 0)  # all runs failed
+    ))
 
     initial_state = {
         "session_id": session_id,
@@ -510,6 +573,12 @@ async def analyze_session(
         "consecutive_empty_steps": 0,
         # Previously completed tools (anti-redundancy)
         "completed_tools": completed_tools,
+        # Tools that always fail on this binary (don't retry)
+        "permanently_failed_tools": permanently_failed_tools,
+        # Agents dispatched so far this run
+        "used_agents": "",
+        # Optional continuation mode: bypass intent classifier
+        "mode": req.mode or "",
     }
 
     final_state = initial_state
@@ -575,8 +644,15 @@ async def analyze_session(
     active_agent = final_state.get("active_agent", "documentation")
     svc.update_workflow_checkpoint(session_id, active_agent)
 
-    if active_agent == "documentation" or final_state.get("final_report"):
+    # Only mark session completed when documentation produced a non-empty final report.
+    # This prevents the race condition where session is marked complete before the
+    # documentation agent runs and synthesizes findings.
+    final_report = final_state.get("final_report", "")
+    is_complete = bool(final_report and final_report.strip())
+    if is_complete:
         svc.complete_session(session_id)
+    else:
+        svc.repo.update_status(session_id, "active")
 
     # Notify the UI that the pipeline has finished
     await ws_manager.broadcast_to_session(session_id, {

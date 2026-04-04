@@ -107,6 +107,7 @@ class ProviderConfig:
             "anthropic": "claude-3-5-sonnet-20241022",
             "google": "gemini/gemini-2.0-flash",
             "mistral": "mistral/mistral-large-latest",
+            "openrouter": "anthropic/claude-3-5-sonnet-20241022",
             "ollama": "ollama/llama3",
             "lmstudio": "openai/local-model",
             "generic": "openai/local-model",
@@ -158,6 +159,10 @@ class DynamicLitellmProvider(BaseLLMProvider):
         prefixed = {"openai", "anthropic", "google", "mistral"}
         if ptype in prefixed:
             return model if "/" in model else model
+        if ptype == "openrouter":
+            # litellm requires "openrouter/<model>" to route via OpenRouter's
+            # OpenAI-compatible endpoint rather than hitting the provider directly.
+            return model if model.startswith("openrouter/") else f"openrouter/{model}"
         if ptype in ("ollama", "lmstudio", "generic"):
             return model if "/" in model else f"openai/{model}"
         return model
@@ -212,7 +217,7 @@ class DynamicLitellmProvider(BaseLLMProvider):
         ptype = self.config.provider_type
         if ptype in ("ollama", "lmstudio", "generic"):
             return bool(self.config.base_url)
-        return bool(self.config.api_key)
+        return bool(self.config.api_key)  # openai, anthropic, google, mistral, openrouter
 
 
 # ---------------------------------------------------------------------------

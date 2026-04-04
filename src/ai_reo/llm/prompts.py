@@ -64,10 +64,33 @@ class PromptEngine:
         text = md_file.read_text(encoding="utf-8")
         text = _FRONTMATTER_RE.sub("", text, count=1).strip()
 
+        # Inject dynamic agents-and-tools table if the template uses it
+        if "{agents_and_tools}" in text and "agents_and_tools" not in kwargs:
+            kwargs = dict(kwargs)
+            kwargs["agents_and_tools"] = self._build_agents_and_tools_table()
+
         for k, v in kwargs.items():
             text = text.replace(f"{{{k}}}", str(v))
 
         return text
+
+    @staticmethod
+    def _build_agents_and_tools_table() -> str:
+        """Build a Markdown table of all agents from AGENT_REGISTRY."""
+        try:
+            from ai_reo.agents.specialized import AGENT_REGISTRY
+        except ImportError:
+            return "(agent registry unavailable)"
+
+        lines = [
+            "| Agent | Description | Primary Tools |",
+            "|---|---|---|",
+        ]
+        for name, meta in AGENT_REGISTRY.items():
+            desc = meta.get("description", "").replace("|", "\\|")
+            tools = meta.get("primary_tools", "").replace("|", "\\|")
+            lines.append(f"| `{name}` | {desc} | {tools} |")
+        return "\n".join(lines)
 
 
 # Global singleton

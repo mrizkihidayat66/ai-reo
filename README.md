@@ -20,11 +20,11 @@ streams findings back in real time, and builds an evolving knowledge graph of th
 +----------------------------v-------------------------------------+
 |                       FastAPI Backend                            |
 |  +----------------+   +--------------------------------------+   |
-|  | LangGraph      |   | Tool Registry (15 tools)             |   |
-|  | Orchestrator   +-->| radare2 - objdump - readelf - nm     |   |
-|  | StaticAnalyst  |   | angr - upx - capa - yara - ghidra    |   |
-|  | DynamicAnalyst |   | die - lief - floss - binwalk         |   |
-|  | Deobfuscator   |   | checksec - unipacker                 |   |
+|  | LangGraph      |   | Tool Registry (25 Docker + native)   |   |
+|  | Orchestrator   +-->| RE: radare2, objdump, readelf, nm    |   |
+|  | StaticAnalyst  |   | packer: upx, unipacker, unlicense    |   |
+|  | DynamicAnalyst |   | mobile: jadx, apktool, apkid         |   |
+|  | Deobfuscator   |   | dynamic: frida, qiling, cape, vol3   |   |
 |  | Debugger       |   +---------------+----------------------+   |
 |  | Documenter     |                   | Docker containers        |
 |  +-------+--------+                   | (isolated, per-run)      |
@@ -49,9 +49,9 @@ streams findings back in real time, and builds an evolving knowledge graph of th
 
 | Feature | Details |
 |---|---|
-| **Multi-agent graph** | LangGraph: Orchestrator -> Static Analyst -> Dynamic Analyst -> Deobfuscator -> Debugger -> Documentation |
-| **15 sandboxed tools** | radare2, objdump, readelf, nm, angr, UPX, capa, YARA, Ghidra, DIE, LIEF, FLOSS, binwalk, checksec, unipacker |
-| **Native tools** | file_type, binary_info, bintropy, entropy_analysis, strings_extract, hex_dump, pefile, scripts (no Docker) |
+| **Multi-agent graph** | LangGraph routing across orchestrator plus specialists: static, dynamic, deobfuscator, crypto, network, mobile, firmware, debugger, code auditor, exploit developer, and documentation |
+| **25 sandboxed tools** | radare2, objdump, readelf, nm, angr, upx, capa, yara, ghidra_headless, die, lief, floss, checksec, unipacker, cape, frida, qiling, pe_sieve, hollows_hunter, unlicense, volatility3, jadx, apktool, apkid, afl_plusplus |
+| **Native tools** | file_type, binary_info, entropy_analysis, strings_extract, hex_dump, pefile, fs_read/fs_write, scripts_write/scripts_list (no Docker) |
 | **Any LLM** | OpenAI, Anthropic, Google Gemini, Mistral, Ollama, LM Studio, or any OpenAI-compatible endpoint via litellm |
 | **Multiple providers** | Configure different models per agent; switch or add providers live from the UI |
 | **Streaming feed** | Real-time WebSocket feed with per-agent colour-coded bubbles and 3-dot typing indicator |
@@ -155,7 +155,7 @@ AI_REO_PORT=9000
 AI_REO_LOG_LEVEL=info
 
 # Database
-AI_REO_DATABASE_URL=sqlite:///~/.ai-reo/sessions.db
+AI_REO_DATABASE_URL=sqlite:///./tmp/.ai-reo/sessions/sessions.db
 
 # Tool Integration & Storage
 AI_REO_SESSIONS_DIR=tmp/.ai-reo/sessions
@@ -189,8 +189,10 @@ ai-reo/
 |   \-- chat.md
 +-- skills/                  # SKILL.md domain knowledge files (Anthropic SKILL.md spec)
 |   +-- malware-analysis/
-|   +-- vulnerability-research/
-|   \-- firmware-analysis/
+|   +-- pe-binary-analysis/
+|   +-- tool-fallback-chains/
+|   +-- multi-binary-correlation/
+|   \-- ...
 +-- docker/                  # One Dockerfile per sandboxed tool
 |   +-- angr/
 |   +-- binwalk/
@@ -247,9 +249,19 @@ ai-reo/
 | **DIE** | `ai-reo/die:latest` | Detect-It-Easy packer/compiler ID |
 | **LIEF** | `ai-reo/lief:latest` | Deep PE/ELF/Mach-O structural parser |
 | **FLOSS** | `ai-reo/floss:latest` | FLARE obfuscated string solver |
-| **binwalk** | `ai-reo/binwalk:latest` | Firmware signature scan + embedded file extraction |
 | **checksec** | `ai-reo/checksec:latest` | Binary hardening audit (PIE, NX, canary, RELRO) |
 | **unipacker** | `ai-reo/unipacker:latest` | Emulation-based PE unpacker |
+| **CAPE** | `ai-reo/cape:latest` | Sandbox submission + behavioral summary |
+| **Frida** | `ai-reo/frida:latest` | Runtime instrumentation and hooks |
+| **Qiling** | `ai-reo/qiling:latest` | Cross-platform binary emulation |
+| **PE-sieve** | `ai-reo/pe_sieve:latest` | In-memory PE anomaly scanning |
+| **HollowsHunter** | `ai-reo/hollows_hunter:latest` | Process hollowing / injected module detection |
+| **unlicense** | `ai-reo/unlicense:latest` | Themida/WinLicense unpacker |
+| **Volatility 3** | `ai-reo/volatility3:latest` | Memory forensics plugins |
+| **JADX** | `ai-reo/jadx:latest` | Android decompilation |
+| **Apktool** | `ai-reo/apktool:latest` | APK disassembly / resource decode |
+| **APKiD** | `ai-reo/apkid:latest` | Android packer/obfuscator detection |
+| **AFL++** | `aflplusplus/aflplusplus` | Coverage-guided fuzzing (QEMU mode) |
 
 All containers mount the session binary directory at `/mnt/staging` and are torn down after
 each command.
@@ -278,19 +290,12 @@ Expected: **5 passed**.
 
 ---
 
-## Roadmap / Known Limitations
+## Roadmap
 
 - [ ] Persistent Neo4j knowledge graph (currently in-process D3 only)
 - [ ] Agent-to-agent memory across sessions
 - [ ] WASM / macOS Mach-O tool coverage
 - [ ] Automated skill triggering via L1 metadata matching (currently all matched skills always loaded)
-
-## Known Issues
-
-- Some tools still fail during real analysis runs (for example: `angr`, `unipacker`, `capa`, `binwalk`, `bintropy`) even though they pass the current tool-health checks. The tool test flow needs deeper validation so readiness checks better reflect real execution conditions.
-- In some runs, the session state moves to `completed` before the Orchestrator-to-Documentation handoff actually produces a final documentation response.
-- The `/documentation` command does not always summarize only the delta since the last documentation step; it may repeat previously completed analysis and can stall without returning a documentation response.
-- The Orchestrator and chat interaction flow still need improvements for routing consistency, response quality, and smoother user-facing session behavior.
 
 ---
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Cpu, Plus, UploadCloud, Terminal, Play, Pencil, Download,
-  Trash2, X, Check, FolderOpen, Settings, Hash, Calendar, Clock, Bot, Wrench,
+  Trash2, X, Check, FolderOpen, Settings, Hash, Calendar, Clock, Bot, Wrench, Brain,
 } from 'lucide-react';
 
 const API = 'http://localhost:9000';
@@ -20,9 +20,10 @@ interface SessionsPageProps {
   onOpenSession: (session: SessionInfo) => void;
   onGoToSettings?: () => void;
   onGoToTools?: () => void;
+  onGoToAgents?: () => void;
 }
 
-export const SessionsPage: React.FC<SessionsPageProps> = ({ onOpenSession, onGoToSettings, onGoToTools }) => {
+export const SessionsPage: React.FC<SessionsPageProps> = ({ onOpenSession, onGoToSettings, onGoToTools, onGoToAgents }) => {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
@@ -232,6 +233,9 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onOpenSession, onGoT
             </button>
             <button className="sessions-tools-btn" onClick={onGoToTools}>
               <Wrench size={14} /> Tools
+            </button>
+            <button className="sessions-tools-btn" onClick={onGoToAgents}>
+              <Brain size={14} /> Agents
             </button>
             <button className="sessions-settings-btn" onClick={onGoToSettings}>
               <Settings size={14} /> Providers

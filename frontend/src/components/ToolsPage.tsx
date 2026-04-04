@@ -11,6 +11,7 @@ interface ToolInfo {
   image: string;
   image_available: boolean;
   error: string | null;
+  description?: string;
 }
 
 interface DockerInfo {
@@ -99,6 +100,45 @@ export const ToolsPage: React.FC<ToolsPageProps> = ({ onContinue, onGoToSettings
   const nonDockerTools = Object.values(tools).filter(t => !t.docker_required);
   const missingCount = dockerTools.filter(t => !t.ready).length;
 
+  // --- Category grouping for Docker tools ---
+  const TOOL_CATEGORIES: Record<string, string> = {
+    // Static analysis
+    radare2: 'Static Analysis', objdump: 'Static Analysis', readelf: 'Static Analysis',
+    nm: 'Static Analysis', angr: 'Static Analysis', ghidra_headless: 'Static Analysis',
+    capa: 'Static Analysis', yara: 'Static Analysis', die: 'Static Analysis',
+    lief: 'Static Analysis', floss: 'Static Analysis', checksec: 'Static Analysis',
+    // Unpacking / deobfuscation
+    upx: 'Unpacking & Deobfuscation', unipacker: 'Unpacking & Deobfuscation',
+    pe_sieve: 'Unpacking & Deobfuscation', hollows_hunter: 'Unpacking & Deobfuscation',
+    unlicense: 'Unpacking & Deobfuscation',
+    // Dynamic analysis
+    frida: 'Dynamic Analysis', qiling: 'Dynamic Analysis',
+    // Sandbox
+    cape: 'Sandbox',
+    // Memory forensics
+    volatility3: 'Memory Forensics',
+    // Fuzzing
+    afl_plusplus: 'Fuzzing',
+    // Mobile / Android
+    jadx: 'Mobile (Android)', apktool: 'Mobile (Android)', apkid: 'Mobile (Android)',
+  };
+
+  const CATEGORY_ORDER = [
+    'Static Analysis', 'Unpacking & Deobfuscation', 'Dynamic Analysis',
+    'Sandbox', 'Memory Forensics', 'Fuzzing', 'Mobile (Android)',
+  ];
+
+  const grouped: Record<string, typeof dockerTools> = {};
+  for (const tool of dockerTools) {
+    const cat = TOOL_CATEGORIES[tool.name] ?? 'Other';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(tool);
+  }
+  const orderedCategories = [
+    ...CATEGORY_ORDER.filter(c => grouped[c]),
+    ...Object.keys(grouped).filter(c => !CATEGORY_ORDER.includes(c)),
+  ];
+
   if (loading) {
     return (
       <div className="page-container animate-fade-in">
@@ -160,7 +200,7 @@ export const ToolsPage: React.FC<ToolsPageProps> = ({ onContinue, onGoToSettings
           {docker?.available ? <Check size={18} /> : <X size={18} />}
         </div>
 
-        {/* Docker Tools */}
+        {/* Docker Tools — grouped by category */}
         {dockerTools.length > 0 && (
           <div className="tools-section">
             <div className="tools-section-header">
@@ -180,56 +220,65 @@ export const ToolsPage: React.FC<ToolsPageProps> = ({ onContinue, onGoToSettings
               )}
             </div>
 
-            <div className="tools-grid">
-              {dockerTools.map(tool => (
-                <div key={tool.name} className={`tools-card ${tool.ready ? 'tools-card-ready' : 'tools-card-missing'}`}>
-                  <div className="tools-card-header">
-                    <span className="tools-card-name">{tool.name}</span>
-                    {tool.ready ? (
-                      <span className="tools-status-badge tools-status-ready"><Check size={12} /> Ready</span>
-                    ) : (
-                      <span className="tools-status-badge tools-status-missing"><X size={12} /> Not Ready</span>
-                    )}
-                  </div>
-                  <code className="tools-card-image">{tool.image}</code>
-                  {!tool.ready && docker?.available && (
-                    <button
-                      className="tools-card-setup"
-                      onClick={() => setupTool(tool.name)}
-                      disabled={!!settingUp}
-                    >
-                      {settingUp === tool.name ? (
-                        <><Loader2 size={12} className="animate-spin" /> Pulling...</>
-                      ) : (
-                        <><Download size={12} /> Setup</>
+            {orderedCategories.map(category => (
+              <div key={category} style={{ marginBottom: '1.25rem' }}>
+                <h3 style={{ fontSize: '0.8rem', fontWeight: 600, textTransform: 'uppercase',
+                             letterSpacing: '0.06em', color: 'var(--text-muted)',
+                             marginBottom: '0.5rem', marginTop: 0 }}>
+                  {category}
+                </h3>
+                <div className="tools-grid">
+                  {grouped[category].map(tool => (
+                    <div key={tool.name} className={`tools-card ${tool.ready ? 'tools-card-ready' : 'tools-card-missing'}`}>
+                      <div className="tools-card-header">
+                        <span className="tools-card-name">{tool.name}</span>
+                        {tool.ready ? (
+                          <span className="tools-status-badge tools-status-ready"><Check size={12} /> Ready</span>
+                        ) : (
+                          <span className="tools-status-badge tools-status-missing"><X size={12} /> Not Ready</span>
+                        )}
+                      </div>
+                      <code className="tools-card-image">{tool.image}</code>
+                      {!tool.ready && docker?.available && (
+                        <button
+                          className="tools-card-setup"
+                          onClick={() => setupTool(tool.name)}
+                          disabled={!!settingUp}
+                        >
+                          {settingUp === tool.name ? (
+                            <><Loader2 size={12} className="animate-spin" /> Pulling...</>
+                          ) : (
+                            <><Download size={12} /> Setup</>
+                          )}
+                        </button>
                       )}
-                    </button>
-                  )}
-                  {tool.error && <span className="tools-card-error">{tool.error}</span>}
-                  {!tool.ready && tool.image.startsWith('ai-reo/') && (
-                    <span className="tools-card-error">This image is built locally from the repo Dockerfiles during Setup.</span>
-                  )}
-                  {tool.ready && (
-                    <button
-                      className="tools-card-test"
-                      onClick={() => testTool(tool.name)}
-                      disabled={!!testingTool}
-                    >
-                      {testingTool === tool.name ? (
-                        <><Loader2 size={12} className="animate-spin" /> Testing...</>
-                      ) : (
-                        <>⚡ Test</>
+                      {tool.error && <span className="tools-card-error">{tool.error}</span>}
+                      {!tool.ready && tool.image.startsWith('ai-reo/') && (
+                        <span className="tools-card-error">Built locally from repo Dockerfiles during Setup.</span>
                       )}
-                    </button>
-                  )}
-                  {testResults[tool.name] && (
-                    <span className={`tools-card-test-result ${testResults[tool.name].ok ? 'tools-test-ok' : 'tools-test-fail'}`}>
-                      {testResults[tool.name].ok ? '✓' : '✗'} {testResults[tool.name].message}
-                    </span>
-                  )}
+                      {tool.ready && (
+                        <button
+                          className="tools-card-test"
+                          onClick={() => testTool(tool.name)}
+                          disabled={!!testingTool}
+                        >
+                          {testingTool === tool.name ? (
+                            <><Loader2 size={12} className="animate-spin" /> Testing...</>
+                          ) : (
+                            <>⚡ Test</>
+                          )}
+                        </button>
+                      )}
+                      {testResults[tool.name] && (
+                        <span className={`tools-card-test-result ${testResults[tool.name].ok ? 'tools-test-ok' : 'tools-test-fail'}`}>
+                          {testResults[tool.name].ok ? '✓' : '✗'} {testResults[tool.name].message}
+                        </span>
+                      )}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -245,6 +294,9 @@ export const ToolsPage: React.FC<ToolsPageProps> = ({ onContinue, onGoToSettings
                     <span className="tools-status-badge tools-status-ready"><Check size={12} /> Ready</span>
                   </div>
                   <span className="tools-card-image" style={{ color: 'var(--text-muted)' }}>No Docker required</span>
+                  {tool.description && (
+                    <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '0.2rem 0 0.4rem 0', lineHeight: 1.4 }}>{tool.description}</p>
+                  )}
                   <button
                     className="tools-card-test"
                     onClick={() => testTool(tool.name)}

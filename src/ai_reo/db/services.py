@@ -92,6 +92,41 @@ class KnowledgeGraphService:
             
         return self.db.query(KnowledgeGraphNode).filter(KnowledgeGraphNode.id.in_(target_ids)).all()
 
+    def delete_node(self, session_id: str, node_id: str) -> bool:
+        """Delete a node and strip any dangling edge references pointing to it."""
+        deleted = self.repo.delete_node(node_id)
+        if not deleted:
+            return False
+        # Cascade: remove any edges in this session that referenced the deleted node
+        remaining = self.db.query(KnowledgeGraphNode).filter(
+            KnowledgeGraphNode.session_id == session_id
+        ).all()
+        for node in remaining:
+            edges = (node.data or {}).get("edges", [])
+            cleaned = [e for e in edges if e.get("target") != node_id]
+            if len(cleaned) != len(edges):
+                node.data = {**node.data, "edges": cleaned}
+        self.db.commit()
+        return True
+
+    def bulk_delete_nodes(self, session_id: str, node_ids: List[str]) -> int:
+        """Delete multiple nodes and strip all dangling edges in the session."""
+        id_set = set(node_ids)
+        count = self.repo.bulk_delete_nodes(node_ids)
+        remaining = self.db.query(KnowledgeGraphNode).filter(
+            KnowledgeGraphNode.session_id == session_id
+        ).all()
+        for node in remaining:
+            edges = (node.data or {}).get("edges", [])
+            cleaned = [e for e in edges if e.get("target") not in id_set]
+            if len(cleaned) != len(edges):
+                node.data = {**node.data, "edges": cleaned}
+        self.db.commit()
+        return count
+
+    def delete_edge(self, source_node_id: str, target_node_id: str, relationship: str) -> bool:
+        return self.repo.delete_edge(source_node_id, target_node_id, relationship)
+
     def export_graph(self, session_id: str) -> Dict[str, Any]:
         """Bulk export graph data entirely to JSON."""
         nodes = self.db.query(KnowledgeGraphNode).filter(KnowledgeGraphNode.session_id == session_id).all()

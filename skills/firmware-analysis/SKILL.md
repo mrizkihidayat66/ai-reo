@@ -47,3 +47,45 @@ This skill provides guidance for analyzing embedded firmware images and IoT bina
 - Most IoT firmware is MIPS, ARM, or RISC-V 32-bit little-endian.
 - Radare2 auto-detects architecture; confirm with `binary_info` or `file_type` first.
 - uClibc and Busybox binaries are heavily stripped; symbol recovery via strings is more reliable than nm.
+
+## Encrypted Firmware Handling
+
+When `binwalk --entropy` shows uniform high entropy (≥ 0.95 across entire image):
+1. Check older firmware versions from vendor — encryption may be absent or key embedded in companion app
+2. Use UART/JTAG extraction on a physical device to dump post-decryption memory
+3. Analyze the bootloader (U-Boot) to find decryption routine and key material
+4. Search Android/iOS companion app APK/IPA for device firmware key constants
+
+See `firmware-extraction` skill for full filesystem type identification (squashfs/JFFS2/UBI/cramfs), U-Boot header parsing, vmlinux extraction, and post-extraction credential checklist.
+
+## Post-Extraction Security Checklist
+
+After successful extraction (see `firmware-extraction` skill):
+
+```bash
+# SUID binaries (privilege escalation):
+find rootfs/ -perm /6000 -type f 2>/dev/null
+
+# Private keys / certs:
+find rootfs/ -name "*.pem" -o -name "*.key" | xargs grep "PRIVATE KEY"
+
+# Hardcoded passwords:
+grep -r "password\|passwd\|secret" rootfs/etc/ rootfs/www/ --include="*.conf" --include="*.cfg"
+
+# Unauthenticated update mechanism:
+grep -r "wget\|curl" rootfs/etc/init* rootfs/usr/share/scripts/ 2>/dev/null | grep -v "https"
+```
+
+## Emulation with QEMU
+
+For dynamic analysis without physical hardware:
+```bash
+# MIPS little-endian system emulation:
+qemu-mips -L squashfs-root/ squashfs-root/usr/sbin/httpd
+
+# ARM full-system emulation:
+qemu-system-arm -M virt -kernel vmlinux -append "root=/dev/sda console=ttyAMA0" -hda rootfs.img
+
+# Use firmwalker for automated credential hunting in extracted FS:
+firmwalker squashfs-root/ firmwalker_output.txt
+```

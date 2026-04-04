@@ -28,6 +28,7 @@ class ToolStatus:
     image: str = ""
     image_available: bool = False
     error: Optional[str] = None
+    description: str = ""
 
 
 class ToolHealthService:
@@ -78,18 +79,29 @@ class ToolHealthService:
         """Build known local images when they are not published to Docker Hub."""
         image = tool.docker_image
         # Maps image tag to its tool subdirectory under docker/<tool>/
+        # Only images that must be built locally are listed here.
+        # External/official Hub images (aflplusplus/aflplusplus, skylot/jadx, …)
+        # are pulled directly and intentionally absent from this map.
         local_image_map = {
-            "ai-reo/objdump:latest":   "objdump",
-            "ai-reo/angr:latest":      "angr",
-            "ai-reo/upx:latest":       "upx",
-            "ai-reo/capa:latest":      "capa",
-            "ai-reo/yara:latest":      "yara",
-            "ai-reo/die:latest":       "die",
-            "ai-reo/lief:latest":      "lief",
-            "ai-reo/checksec:latest":  "checksec",
-            "ai-reo/unipacker:latest": "unipacker",
-            "ai-reo/floss:latest":     "floss",
-            "ai-reo/binwalk:latest":   "binwalk",
+            "ai-reo/objdump:latest":        "objdump",
+            "ai-reo/upx:latest":            "upx",
+            "ai-reo/capa:latest":           "capa",
+            "ai-reo/yara:latest":           "yara",
+            "ai-reo/die:latest":            "die",
+            "ai-reo/lief:latest":           "lief",
+            "ai-reo/checksec:latest":       "checksec",
+            "ai-reo/unipacker:latest":      "unipacker",
+            "ai-reo/floss:latest":          "floss",
+            "ai-reo/frida:latest":          "frida",
+            "ai-reo/qiling:latest":         "qiling",
+            "ai-reo/pe_sieve:latest":       "pe_sieve",
+            "ai-reo/hollows_hunter:latest": "hollows_hunter",
+            "ai-reo/unlicense:latest":      "unlicense",
+            "ai-reo/volatility3:latest":    "volatility3",
+            "ai-reo/apktool:latest":        "apktool",
+            "ai-reo/apkid:latest":          "apkid",
+            "ai-reo/jadx:latest":           "jadx",
+            "ai-reo/angr:latest":           "angr",
         }
         tool_dir = local_image_map.get(image)
         if tool_dir is None:
@@ -135,8 +147,9 @@ class ToolHealthService:
                     error=None if docker_ok else "Docker daemon not available",
                 )
             else:
-                # Non-Docker tools (fs_read, fs_write) are always ready
-                result[name] = ToolStatus(name=name, ready=True)
+                # Non-Docker tools (fs_read, fs_write, etc.) are always ready
+                desc = getattr(tool, "description", "")
+                result[name] = ToolStatus(name=name, ready=True, description=desc)
 
         return result
 

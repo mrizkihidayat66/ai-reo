@@ -69,6 +69,10 @@ class ToolSettings(BaseSettings):
         default=_REPO_ROOT / "agents",
         description="Directory containing agent instruction .md files. Defaults to the bundled agents/ at the repo root.",
     )
+    cape_url: str = Field(
+        default="",
+        description="Base URL for the CAPE Sandbox REST API (e.g. http://localhost:8000). Leave empty to disable CAPE integration.",
+    )
 
 
 class ServerSettings(BaseSettings):

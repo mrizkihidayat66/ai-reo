@@ -81,6 +81,15 @@ class DockerBasedTool(BaseTool):
         """Full readiness check: Docker available AND image pulled."""
         return self.is_docker_available() and self.is_image_available()
 
+    @property
+    def smoke_test_cmd(self) -> str | None:
+        """Optional command to run inside the container for real-world validation.
+
+        If None, the test endpoint falls back to 'echo AI-REO-OK'.
+        Override in subclasses with a tool-specific version check or quick test.
+        """
+        return None
+
     async def pull_image(self, progress_callback=None) -> bool:
         """Pull the Docker image, streaming progress via callback.
 

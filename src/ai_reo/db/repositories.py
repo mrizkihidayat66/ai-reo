@@ -128,6 +128,41 @@ class KnowledgeGraphRepository:
             .first()
         )
 
+    def delete_node(self, node_id: str) -> bool:
+        """Delete a single node by its ID. Returns True if deleted, False if not found."""
+        node = self.db.query(KnowledgeGraphNode).filter(KnowledgeGraphNode.id == node_id).first()
+        if not node:
+            return False
+        self.db.delete(node)
+        self.db.commit()
+        return True
+
+    def bulk_delete_nodes(self, node_ids: List[str]) -> int:
+        """Delete multiple nodes by ID. Returns the count deleted."""
+        deleted = (
+            self.db.query(KnowledgeGraphNode)
+            .filter(KnowledgeGraphNode.id.in_(node_ids))
+            .delete(synchronize_session=False)
+        )
+        self.db.commit()
+        return deleted
+
+    def delete_edge(self, source_node_id: str, target_node_id: str, relationship: str) -> bool:
+        """Remove a logical edge stored in the source node's JSON data."""
+        node = self.db.query(KnowledgeGraphNode).filter(KnowledgeGraphNode.id == source_node_id).first()
+        if not node:
+            return False
+        edges = (node.data or {}).get("edges", [])
+        new_edges = [
+            e for e in edges
+            if not (e.get("target") == target_node_id and e.get("relationship") == relationship)
+        ]
+        if len(new_edges) == len(edges):
+            return False
+        node.data = {**node.data, "edges": new_edges}
+        self.db.commit()
+        return True
+
 
 class ToolExecutionRepository:
     """Repository for tracking tool execution logs."""

@@ -77,6 +77,20 @@ const PROVIDER_TYPES: Record<string, PTypeMeta> = {
     default_models: ['openai/local-model'],
     color: '#64748b',
   },
+  openrouter: {
+    label: 'OpenRouter',
+    icon: <Globe size={16} />,
+    needs_key: true, needs_url: false,
+    default_url: 'https://openrouter.ai/api/v1',
+    default_models: [
+      'anthropic/claude-3-5-sonnet-20241022',
+      'anthropic/claude-3-5-haiku-20241022',
+      'openai/gpt-4o',
+      'meta-llama/llama-3.3-70b-instruct',
+      'google/gemini-2.0-flash-001',
+    ],
+    color: '#6366f1',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -422,6 +436,14 @@ const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded, editingPr
                 <option value="auto">auto (use first available)</option>
                 {models.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
+              {ptype === 'openrouter' && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.35rem 0 0' }}>
+                  Enter models as <code>provider/model-name</code> (e.g.{' '}
+                  <code>anthropic/claude-3-5-sonnet-20241022</code>).
+                  The <code>openrouter/</code> prefix is added automatically.
+                  {' '}<strong>auto</strong> requires at least one model in the list above.
+                </p>
+              )}
             </div>
 
             {/* Advanced Settings */}
@@ -479,16 +501,36 @@ const AddProviderModal: React.FC<AddModalProps> = ({ onClose, onAdded, editingPr
             {/* Test result inline */}
             {testResult && (
               <div style={{
-                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)',
-                background: testResult.ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)',
+                background: testResult.ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.08)',
                 border: `1px solid ${testResult.ok ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}`,
                 fontSize: '0.85rem',
                 animation: 'fadeIn 0.3s ease',
               }}>
                 {testResult.ok
-                  ? <><CheckCircle size={15} color="var(--success)" /><span style={{ color: 'var(--success)' }}>Connected successfully — {testResult.latency_ms}ms latency</span></>
-                  : <><XCircle size={15} color="var(--danger)" /><span style={{ color: 'var(--danger)' }}>{testResult.error}</span></>
+                  ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <CheckCircle size={15} color="var(--success)" />
+                      <span style={{ color: 'var(--success)' }}>Connected successfully — {testResult.latency_ms}ms latency</span>
+                    </div>
+                  )
+                  : (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
+                        <XCircle size={15} color="var(--danger)" />
+                        <span style={{ color: 'var(--danger)', fontWeight: 600, fontSize: '0.8rem' }}>Connection Failed</span>
+                      </div>
+                      <pre style={{
+                        margin: 0, maxHeight: '180px', overflowY: 'auto', overflowX: 'auto',
+                        fontSize: '0.76rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                        background: 'rgba(0,0,0,0.15)', borderRadius: '4px', padding: '0.5rem',
+                        color: 'var(--danger)', userSelect: 'all', fontFamily: 'var(--font-mono)',
+                        lineHeight: 1.4, border: '1px solid rgba(239,68,68,0.15)',
+                      }}>
+                        {testResult.error}
+                      </pre>
+                    </>
+                  )
                 }
               </div>
             )}
@@ -698,10 +740,31 @@ const ProviderCard: React.FC<CardProps> = ({ provider, onEdit }) => {
         </button>
 
         {testResult && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', animation: 'fadeIn 0.3s' }}>
+          <div style={{ marginTop: '0.6rem', animation: 'fadeIn 0.3s' }}>
             {testResult.ok
-              ? <><CheckCircle size={14} color="var(--success)" /><span style={{ color: 'var(--success)' }}>{testResult.latency_ms}ms</span></>
-              : <><XCircle size={14} color="var(--danger)" /><span style={{ color: 'var(--danger)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{testResult.error}</span></>
+              ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem' }}>
+                  <CheckCircle size={14} color="var(--success)" />
+                  <span style={{ color: 'var(--success)' }}>{testResult.latency_ms}ms</span>
+                </div>
+              )
+              : (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', marginBottom: '0.3rem' }}>
+                    <XCircle size={14} color="var(--danger)" />
+                    <span style={{ color: 'var(--danger)', fontWeight: 600 }}>Connection Failed</span>
+                  </div>
+                  <pre style={{
+                    margin: 0, maxHeight: '120px', overflowY: 'auto', overflowX: 'auto',
+                    fontSize: '0.74rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                    background: 'rgba(0,0,0,0.15)', borderRadius: '4px', padding: '0.4rem 0.5rem',
+                    color: 'var(--danger)', userSelect: 'all', fontFamily: 'var(--font-mono)',
+                    lineHeight: 1.4, border: '1px solid rgba(239,68,68,0.15)',
+                  }}>
+                    {testResult.error}
+                  </pre>
+                </>
+              )
             }
           </div>
         )}

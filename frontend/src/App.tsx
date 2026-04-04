@@ -3,10 +3,11 @@ import { WsProvider, useWs } from './context/WebSocketContext';
 import { ProvidersProvider, useProviders } from './context/ProvidersContext';
 import { ProvidersPage } from './components/ProvidersPage';
 import { ToolsPage } from './components/ToolsPage';
+import { AgentsPage } from './components/AgentsPage';
 import { SessionsPage } from './components/SessionsPage';
 import { AnalysisDashboard } from './components/AnalysisDashboard';
 
-type Stage = 'setup' | 'tools' | 'sessions' | 'dashboard';
+type Stage = 'setup' | 'tools' | 'agents' | 'sessions' | 'dashboard';
 
 interface SessionInfo {
   id: string;
@@ -34,8 +35,18 @@ const OrchestratorView: React.FC = () => {
   if (stage === 'tools') {
     return (
       <ToolsPage
+        onContinue={() => setStage('agents')}
+        onGoToSettings={() => setStage('setup')}
+      />
+    );
+  }
+
+  if (stage === 'agents') {
+    return (
+      <AgentsPage
         onContinue={() => setStage('sessions')}
         onGoToSettings={() => setStage('setup')}
+        onGoToTools={() => setStage('tools')}
       />
     );
   }
@@ -50,6 +61,7 @@ const OrchestratorView: React.FC = () => {
         }}
         onGoToSettings={() => setStage('setup')}
         onGoToTools={() => setStage('tools')}
+        onGoToAgents={() => setStage('agents')}
       />
     );
   }
@@ -59,6 +71,7 @@ const OrchestratorView: React.FC = () => {
       sessionName={activeSession?.name || activeSession?.binary_path || 'Session'}
       onGoToSettings={() => setStage('setup')}
       onGoToTools={() => setStage('tools')}
+      onGoToAgents={() => setStage('agents')}
       onBackToSessions={() => {
         setActiveSession(null);
         setStage('sessions');

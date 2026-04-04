@@ -240,7 +240,16 @@ class BaseAgent:
                         except Exception:
                             result_data = {}
 
-                        stdout = str(result_data.get("output", result_data.get("stdout", ""))) if result_data else result_str
+                        # Prefer named keys; fall back to the raw result_str so the
+                        # history page always shows something (many tools return structured
+                        # dicts with domain-specific keys instead of "output"/"stdout").
+                        if result_data:
+                            stdout = str(result_data.get(
+                                "output",
+                                result_data.get("stdout", result_str),
+                            ))
+                        else:
+                            stdout = result_str
                         stderr = str(result_data.get("error", result_data.get("stderr", ""))) if result_data else ""
                         raw_exit = result_data.get("exit_code") if result_data else None
                         if raw_exit is not None:

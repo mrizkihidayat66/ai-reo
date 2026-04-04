@@ -73,39 +73,68 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Matches any fenced code block (```json or ``` plain). Finds ALL occurrences — we try last-to-first
+# because the AgentStepResult JSON block is always appended at the END of the response.
 _JSON_BLOCK_RE = re.compile(
     r"```(?:json)?\s*\n(.*?)\n```",
     re.DOTALL,
 )
-_BARE_JSON_RE = re.compile(
-    r'(\{[^{}]*"goal_completed"[^{}]*\})',
-    re.DOTALL,
-)
+# Broad search for any JSON object containing "goal_completed" at any nesting depth.
+# Uses a stack-based extractor (see _extract_json_with_goal_completed) rather than regex
+# because [^{}]* can't match nested objects (findings array contains nested braces).
+_GOAL_COMPLETED_RE = re.compile(r'"goal_completed"\s*:', re.DOTALL)
+
+
+def _extract_json_with_goal_completed(text: str) -> list[str]:
+    """Extract all top-level JSON objects that contain 'goal_completed' using brace counting."""
+    results = []
+    i = 0
+    while i < len(text):
+        if text[i] == '{':
+            depth = 0
+            start = i
+            for j in range(i, len(text)):
+                if text[j] == '{':
+                    depth += 1
+                elif text[j] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start:j + 1]
+                        if '"goal_completed"' in candidate:
+                            results.append(candidate)
+                        i = j + 1
+                        break
+            else:
+                break
+        else:
+            i += 1
+    return results
 
 
 def parse_agent_step_result(raw_text: str) -> AgentStepResult:
     """Best-effort extraction of an ``AgentStepResult`` from LLM output.
 
     Strategy:
-      1. Try to find a fenced ```json block
-      2. Fall back to bare JSON object containing ``goal_completed``
-      3. If all parsing fails, wrap the raw text as a summary-only result
+      1. Try fenced ```json blocks in REVERSE order (last block first — JSON is always appended last)
+      2. Fall back to brace-counted extraction of any JSON object containing 'goal_completed'
+      3. Try the entire text as JSON
+      4. Wrap as prose fallback (0 findings, no KG writes)
     """
-    # Strategy 1: fenced code block
-    match = _JSON_BLOCK_RE.search(raw_text)
-    if match:
+    # Strategy 1: fenced code blocks — iterate in reverse (last match = appended JSON block)
+    all_blocks = _JSON_BLOCK_RE.findall(raw_text)
+    for block in reversed(all_blocks):
         try:
-            return AgentStepResult.model_validate_json(match.group(1))
+            return AgentStepResult.model_validate_json(block)
         except Exception:
-            logger.debug("Fenced JSON block found but failed to parse as AgentStepResult.")
+            logger.debug("Fenced code block found but not a valid AgentStepResult, trying next.")
 
-    # Strategy 2: bare JSON with goal_completed key
-    match = _BARE_JSON_RE.search(raw_text)
-    if match:
+    # Strategy 2: brace-counted JSON objects containing "goal_completed" — try last-to-first
+    candidates = _extract_json_with_goal_completed(raw_text)
+    for candidate in reversed(candidates):
         try:
-            return AgentStepResult.model_validate_json(match.group(1))
+            return AgentStepResult.model_validate_json(candidate)
         except Exception:
-            logger.debug("Bare JSON found but failed to parse as AgentStepResult.")
+            logger.debug("Bare JSON candidate found but failed to parse as AgentStepResult.")
 
     # Strategy 3: try the entire text as JSON
     stripped = raw_text.strip()
@@ -115,7 +144,7 @@ def parse_agent_step_result(raw_text: str) -> AgentStepResult:
         except Exception:
             pass
 
-    # Fallback: wrap as unstructured prose
+    # Fallback: wrap as unstructured prose — 0 findings, nothing written to KG
     logger.warning("Could not parse AgentStepResult from LLM output; wrapping as prose summary.")
     return AgentStepResult(
         goal_completed=False,

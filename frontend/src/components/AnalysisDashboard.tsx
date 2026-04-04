@@ -6,12 +6,14 @@ import { GraphPanel } from './GraphPanel';
 import {
   Activity, Terminal, Send, Pause, Play, Settings, ArrowLeft,
   Wrench, AlertCircle, Brain, Code2, FileText, Zap, Bot, Unlock, Bug,
+  Smartphone, Key, Network, Cpu, Bomb, Shield,
 } from 'lucide-react';
 
 interface DashboardProps {
   sessionName?: string;
   onGoToSettings?: () => void;
   onGoToTools?: () => void;
+  onGoToAgents?: () => void;
   onBackToSessions?: () => void;
 }
 
@@ -19,14 +21,20 @@ const API = 'http://localhost:9000';
 
 /* Agent visual identity */
 const AGENT_STYLE: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
-  orchestrator:    { color: '#8b5cf6', icon: <Brain size={14} />,    label: 'Orchestrator' },
-  static_analyst:  { color: '#3b82f6', icon: <Code2 size={14} />,   label: 'Static Analyst' },
-  dynamic_analyst: { color: '#f97316', icon: <Zap size={14} />,     label: 'Dynamic Analyst' },
-  deobfuscator:    { color: '#ec4899', icon: <Unlock size={14} />,   label: 'Deobfuscator' },
-  debugger:        { color: '#f59e0b', icon: <Bug size={14} />,      label: 'Debugger' },
-  documentation:   { color: '#10b981', icon: <FileText size={14} />, label: 'Documentation' },
-  'ai-reo':        { color: '#06b6d4', icon: <Bot size={14} />,     label: 'AI-REO' },
-  direct_chat:     { color: '#06b6d4', icon: <Bot size={14} />,     label: 'AI-REO' },
+  orchestrator:      { color: '#8b5cf6', icon: <Brain size={14} />,      label: 'Orchestrator' },
+  static_analyst:    { color: '#3b82f6', icon: <Code2 size={14} />,      label: 'Static Analyst' },
+  dynamic_analyst:   { color: '#f97316', icon: <Zap size={14} />,        label: 'Dynamic Analyst' },
+  deobfuscator:      { color: '#ec4899', icon: <Unlock size={14} />,     label: 'Deobfuscator' },
+  debugger:          { color: '#f59e0b', icon: <Bug size={14} />,        label: 'Debugger' },
+  mobile_analyst:    { color: '#10b981', icon: <Smartphone size={14} />, label: 'Mobile Analyst' },
+  crypto_analyst:    { color: '#d97706', icon: <Key size={14} />,        label: 'Crypto Analyst' },
+  network_analyst:   { color: '#06b6d4', icon: <Network size={14} />,    label: 'Network Analyst' },
+  firmware_analyst:  { color: '#7c3aed', icon: <Cpu size={14} />,        label: 'Firmware Analyst' },
+  exploit_developer: { color: '#ef4444', icon: <Bomb size={14} />,       label: 'Exploit Dev' },
+  code_auditor:      { color: '#6b7280', icon: <Shield size={14} />,     label: 'Code Auditor' },
+  documentation:     { color: '#10b981', icon: <FileText size={14} />,   label: 'Documentation' },
+  'ai-reo':          { color: '#06b6d4', icon: <Bot size={14} />,        label: 'AI-REO' },
+  direct_chat:       { color: '#06b6d4', icon: <Bot size={14} />,        label: 'AI-REO' },
 };
 
 const getAgentStyle = (agent: string) =>
@@ -104,15 +112,17 @@ const SLASH_COMMANDS: Array<{
   { cmd: '/logic',       desc: 'Analyze program logic / control flow',        transform: () => 'Map the main program logic: control flow graph, key decision branches, and execution paths.' },
   { cmd: '/run',         desc: 'Execute a specific tool directly',            transform: (a) => `Execute this specific analysis and report results: ${a}` },
   { cmd: '/script',      desc: 'Generate and save a reusable script',         transform: (a) => `Write, execute, and save a reusable analysis script for: ${a}. Use scripts_write to save it to the persistent shared scripts directory.` },
-  { cmd: '/tools',       desc: 'List available tools and status',             localHandler: true },
-  { cmd: '/agents',      desc: 'Show active agents',                          localHandler: true },
+  { cmd: '/tools',       desc: 'List all available tools and readiness status',      localHandler: true },
+  { cmd: '/agents',      desc: 'List all analysis agents, roles and tools',           localHandler: true },
+  { cmd: '/help',        desc: 'Show all slash commands with descriptions',           localHandler: true },
+  { cmd: '/skills',      desc: 'List loaded skills and which agents use them',        localHandler: true },
   { cmd: '/stop',        desc: 'Pause analysis',                              localHandler: true },
   { cmd: '/resume',      desc: 'Resume analysis',                             localHandler: true },
   { cmd: '/documentation', desc: 'Generate detailed report of current analysis findings', transform: () => 'Generate a comprehensive documentation report summarizing all findings discovered so far. Include binary metadata, discovered functions, strings, imports, vulnerabilities, and an executive summary. Update the Knowledge Graph with any missing nodes.' },
   { cmd: '/knowledge_import', desc: 'Import & merge a Knowledge Graph from an exported session', localHandler: true },
 ];
 
-export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoToSettings, onGoToTools, onBackToSessions }) => {
+export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoToSettings, onGoToTools, onGoToAgents, onBackToSessions }) => {
   const { isConnected, logs, session, sendCommand, clearLogs } = useWs();
   const [goal, setGoal] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
@@ -120,9 +130,11 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
   const [isPaused, setIsPaused] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
   const [userMessages, setUserMessages] = useState<{ id: string; text: string; ts: string }[]>([]);
+  const [localMessages, setLocalMessages] = useState<{ id: string; agent: string; text: string; ts: string }[]>([]);
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const [currentGoal, setCurrentGoal] = useState<string | null>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [slashMenuIndex, setSlashMenuIndex] = useState<number>(-1);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const kgImportRef = useRef<HTMLInputElement>(null);
@@ -244,7 +256,7 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
   // Slash command & submission logic
   // -------------------------------------------------------------------------
 
-  const submitGoal = async (goalText: string, displayText?: string) => {
+  const submitGoal = async (goalText: string, displayText?: string, mode?: string) => {
     if (!goalText.trim() || !session) return;
     const displayMsg = displayText || goalText;
     const msg = { id: `user-${Date.now()}`, text: displayMsg, ts: new Date().toLocaleTimeString() };
@@ -256,11 +268,14 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
     setActiveAgent(null);
     setCurrentGoal(null);
     setGoal('');
+    setSlashMenuIndex(-1);
     try {
+      const body: Record<string, string> = { goal: goalText };
+      if (mode) body.mode = mode;
       const res = await fetch(`${API}/sessions/${session}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ goal: goalText }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         // HTTP-level failure (e.g. 500): the WS event won't arrive, so reset manually
@@ -285,27 +300,112 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
 
       const slashCmd = SLASH_COMMANDS.find(c => c.cmd === cmdPart);
 
-      // Local-only commands
+      // Local-only commands — never call the LLM
       if (slashCmd?.localHandler) {
-        if (cmdPart === '/stop')   { sendCommand('pause');  setGoal(''); return; }
-        if (cmdPart === '/resume') { sendCommand('resume'); setGoal(''); return; }
+        setGoal('');
+
+        if (cmdPart === '/stop')   { sendCommand('pause');  return; }
+        if (cmdPart === '/resume') { sendCommand('resume'); return; }
         if (cmdPart === '/knowledge_import') {
-          setGoal('');
           kgImportRef.current?.click();
           return;
         }
-        // /tools and /agents → turn into a question answered by direct_chat
-        const infoGoal =
-          cmdPart === '/tools'  ? 'List all available analysis tools, their purpose, and current readiness status.' :
-          cmdPart === '/agents' ? 'List the available analysis agents, their roles, and when each is used.' :
-          argsPart || trimmed;
-        submitGoal(infoGoal, trimmed);
+
+        // Show user message immediately
+        setUserMessages(prev => [...prev, {
+          id: `user-${Date.now()}`, text: trimmed, ts: new Date().toLocaleTimeString(),
+        }]);
+
+        const ts = new Date().toLocaleTimeString();
+        const localId = `local-${Date.now()}`;
+
+        if (cmdPart === '/help') {
+          const helpMd = [
+            '## Available Slash Commands\n',
+            '| Command | Description |',
+            '|---------|-------------|',
+            ...SLASH_COMMANDS.map(c => `| \`${c.cmd}\` | ${c.desc} |`),
+          ].join('\n');
+          setLocalMessages(prev => [...prev, { id: localId, agent: 'ai-reo', text: helpMd, ts }]);
+          return;
+        }
+
+        if (cmdPart === '/tools') {
+          fetch(`${API}/tools/status?ts=${Date.now()}`, { cache: 'no-store' })
+            .then(r => r.ok ? r.json() : Promise.reject('API error'))
+            .then(data => {
+              const toolList: any[] = Object.values(data.tools || {});
+              const docker = toolList.filter((t: any) => t.docker_required);
+              const builtin = toolList.filter((t: any) => !t.docker_required);
+              const lines = [
+                `## Tools Status (${toolList.length} total)\n`,
+                `**Docker:** ${data.docker?.available ? `✓ Connected (v${data.docker.server_version})` : '✗ Not available'}\n`,
+              ];
+              if (builtin.length > 0) {
+                lines.push('### Built-in Tools (always ready)');
+                lines.push('| Tool | Description |');
+                lines.push('|------|-------------|');
+                builtin.forEach((t: any) => lines.push(`| \`${t.name}\` | ${t.description || 'Built-in'} |`));
+                lines.push('');
+              }
+              if (docker.length > 0) {
+                lines.push('### Docker-Based Tools');
+                lines.push('| Tool | Status | Image |');
+                lines.push('|------|--------|-------|');
+                docker.forEach((t: any) => lines.push(
+                  `| \`${t.name}\` | ${t.ready ? '✓ Ready' : '✗ Not ready'} | \`${t.image}\` |`
+                ));
+              }
+              setLocalMessages(prev => [...prev, { id: localId, agent: 'ai-reo', text: lines.join('\n'), ts }]);
+            })
+            .catch(() => setLocalMessages(prev => [...prev, { id: localId, agent: 'ai-reo', text: '⚠ Could not reach /tools/status API.', ts }]));
+          return;
+        }
+
+        if (cmdPart === '/agents') {
+          fetch(`${API}/agents`)
+            .then(r => r.ok ? r.json() : Promise.reject('API error'))
+            .then((data: any[]) => {
+              const lines = [
+                `## Analysis Agents (${data.length} registered)\n`,
+                '| Agent | Description | Primary Tools |',
+                '|-------|-------------|---------------|',
+                ...data.map(a => `| **${a.name}** | ${a.description.split('.')[0]}. | ${a.primary_tools} |`),
+              ];
+              setLocalMessages(prev => [...prev, { id: localId, agent: 'ai-reo', text: lines.join('\n'), ts }]);
+            })
+            .catch(() => setLocalMessages(prev => [...prev, { id: localId, agent: 'ai-reo', text: '⚠ Could not reach /agents API.', ts }]));
+          return;
+        }
+
+        if (cmdPart === '/skills') {
+          fetch(`${API}/skills`)
+            .then(r => r.ok ? r.json() : Promise.reject('API error'))
+            .then((data: any[]) => {
+              if (data.length === 0) {
+                setLocalMessages(prev => [...prev, { id: localId, agent: 'ai-reo', text: 'No skills loaded. Add `.md` skill files to the `src/ai_reo/skills/` directory.', ts }]);
+                return;
+              }
+              const lines = [
+                `## Loaded Skills (${data.length})\n`,
+                '| Skill | For Agents | Tags |',
+                '|-------|------------|------|',
+                ...data.map((s: any) => `| **${s.name}** | ${s.universal ? 'All agents' : s.targets.join(', ')} | ${s.tags.join(', ')} |`),
+              ];
+              setLocalMessages(prev => [...prev, { id: localId, agent: 'ai-reo', text: lines.join('\n'), ts }]);
+            })
+            .catch(() => setLocalMessages(prev => [...prev, { id: localId, agent: 'ai-reo', text: '⚠ Could not reach /skills API.', ts }]));
+          return;
+        }
+
         return;
       }
 
       if (slashCmd?.transform) {
         const transformed = slashCmd.transform(argsPart);
-        submitGoal(transformed || argsPart || trimmed, trimmed);
+        // /next sends with continuation mode to bypass intent classifier
+        const mode = cmdPart === '/next' ? 'continuation' : undefined;
+        submitGoal(transformed || argsPart || trimmed, trimmed, mode);
         return;
       }
     }
@@ -478,6 +578,11 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
               <Wrench size={14} /> Tools
             </button>
           )}
+          {onGoToAgents && (
+            <button onClick={onGoToAgents} className="dashboard-action-btn">
+              <Brain size={14} /> Agents
+            </button>
+          )}
           <button onClick={onGoToSettings} className="dashboard-action-btn">
             <Settings size={14} /> Providers
           </button>
@@ -533,6 +638,25 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
                 </div>
               </div>
             ))}
+
+            {/* Local slash-command responses (tools/agents/help/skills) */}
+            {localMessages.map(m => {
+              const style = getAgentStyle(m.agent);
+              return (
+                <div key={m.id} className="animate-fade-in feed-entry">
+                  <span className="mono feed-timestamp">{m.ts}</span>
+                  <div className="chat-msg" style={{ borderLeftColor: style.color }}>
+                    <div className="chat-msg-header">
+                      <span style={{ color: style.color }}>{style.icon}</span>
+                      <span className="chat-msg-agent" style={{ color: style.color }}>{style.label}</span>
+                    </div>
+                    <div className="chat-msg-body">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
 
             {/* Live WebSocket stream — only renders entries with visible content */}
             {history.length === 0 && logs.length === 0 && userMessages.length === 0 && !analyzing ? (
@@ -592,17 +716,17 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
         {goal.startsWith('/') && !analyzing && (() => {
           const q = goal.toLowerCase();
           const matches = SLASH_COMMANDS.filter(
-            c => c.cmd.startsWith(q) || c.aliases?.some(a => a.startsWith(q))
+            c => c.cmd.startsWith(q) || (c as any).aliases?.some((a: string) => a.startsWith(q))
           );
           if (matches.length === 0) return null;
           return (
             <div className="slash-menu">
-              {matches.map(c => (
+              {matches.map((c, idx) => (
                 <button
                   key={c.cmd}
-                  className="slash-menu-item"
+                  className={`slash-menu-item${slashMenuIndex === idx ? ' slash-menu-item-active' : ''}`}
                   type="button"
-                  onMouseDown={e => { e.preventDefault(); setGoal(c.cmd + ' '); inputRef.current?.focus(); }}
+                  onMouseDown={e => { e.preventDefault(); setGoal(c.cmd + ' '); setSlashMenuIndex(-1); inputRef.current?.focus(); }}
                 >
                   <span className="slash-menu-cmd">{c.cmd}</span>
                   <span className="slash-menu-desc">{c.desc}</span>
@@ -618,12 +742,49 @@ export const AnalysisDashboard: React.FC<DashboardProps> = ({ sessionName, onGoT
             placeholder="Type a message, goal, or /command…"
             value={goal}
             rows={1}
-            onChange={e => setGoal(e.target.value)}
+            onChange={e => { setGoal(e.target.value); setSlashMenuIndex(-1); }}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey) {
+                // If slash menu is open and an item is highlighted, complete it
+                if (goal.startsWith('/') && !analyzing) {
+                  const q = goal.toLowerCase();
+                  const matches = SLASH_COMMANDS.filter(
+                    c => c.cmd.startsWith(q) || (c as any).aliases?.some((a: string) => a.startsWith(q))
+                  );
+                  if (slashMenuIndex >= 0 && slashMenuIndex < matches.length) {
+                    e.preventDefault();
+                    setGoal(matches[slashMenuIndex].cmd + ' ');
+                    setSlashMenuIndex(-1);
+                    return;
+                  }
+                }
                 e.preventDefault();
                 handleAnalyze(e as unknown as React.FormEvent);
               }
+              if ((e.key === 'Tab' || e.key === 'ArrowDown') && goal.startsWith('/') && !analyzing) {
+                e.preventDefault();
+                const q = goal.toLowerCase();
+                const matches = SLASH_COMMANDS.filter(
+                  c => c.cmd.startsWith(q) || (c as any).aliases?.some((a: string) => a.startsWith(q))
+                );
+                if (matches.length > 0) {
+                  const next = (slashMenuIndex + 1) % matches.length;
+                  setSlashMenuIndex(next);
+                  // If only one match, complete it immediately on Tab
+                  if (matches.length === 1) { setGoal(matches[0].cmd + ' '); setSlashMenuIndex(-1); }
+                }
+              }
+              if (e.key === 'ArrowUp' && goal.startsWith('/') && !analyzing) {
+                e.preventDefault();
+                const q = goal.toLowerCase();
+                const matches = SLASH_COMMANDS.filter(
+                  c => c.cmd.startsWith(q) || (c as any).aliases?.some((a: string) => a.startsWith(q))
+                );
+                if (matches.length > 0) {
+                  setSlashMenuIndex(prev => prev <= 0 ? matches.length - 1 : prev - 1);
+                }
+              }
+              if (e.key === 'Escape') { setSlashMenuIndex(-1); }
             }}
             disabled={analyzing}
           />

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Database, ChevronDown, ChevronRight } from 'lucide-react';
+import { Database, ChevronDown, ChevronRight, Trash2, CheckSquare, Square } from 'lucide-react';
 
 const API = 'http://localhost:9000';
 
@@ -34,6 +34,10 @@ export const GraphPanel: React.FC<GraphPanelProps> = ({ sessionId, isActive }) =
   const [nodes, setNodes] = useState<KGNode[]>([]);
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
   const [newNodeIds, setNewNodeIds] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchGraph = useCallback(async () => {
     if (!sessionId) return;
@@ -44,12 +48,10 @@ export const GraphPanel: React.FC<GraphPanelProps> = ({ sessionId, isActive }) =
       const incoming: KGNode[] = data.nodes || [];
 
       setNodes(prev => {
-        // Detect new nodes
         const prevIds = new Set(prev.map(n => n.id));
         const justAdded = incoming.filter(n => !prevIds.has(n.id)).map(n => n.id);
         if (justAdded.length > 0) {
           setNewNodeIds(new Set(justAdded));
-          // Clear "new" highlight after 5s
           setTimeout(() => setNewNodeIds(new Set()), 5000);
         }
         return incoming;
@@ -59,7 +61,6 @@ export const GraphPanel: React.FC<GraphPanelProps> = ({ sessionId, isActive }) =
     }
   }, [sessionId]);
 
-  // Poll every 3s while the session is active
   useEffect(() => {
     if (!sessionId) return;
     fetchGraph();
@@ -69,7 +70,6 @@ export const GraphPanel: React.FC<GraphPanelProps> = ({ sessionId, isActive }) =
     }
   }, [sessionId, isActive, fetchGraph]);
 
-  // Group nodes by type
   const groups = nodes.reduce<Record<string, KGNode[]>>((acc, node) => {
     const t = node.node_type || 'other';
     (acc[t] = acc[t] || []).push(node);
@@ -84,6 +84,46 @@ export const GraphPanel: React.FC<GraphPanelProps> = ({ sessionId, isActive }) =
     });
   };
 
+  const toggleSelectNode = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === nodes.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(nodes.map(n => n.id)));
+    }
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+    setDeleteConfirm(false);
+  };
+
+  const handleDeleteConfirmed = async () => {
+    if (!sessionId || selectedIds.size === 0) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`${API}/sessions/${sessionId}/kg/nodes/bulk-delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node_ids: Array.from(selectedIds) }),
+      });
+      if (res.ok) {
+        setNodes(prev => prev.filter(n => !selectedIds.has(n.id)));
+        exitSelectMode();
+      }
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Header */}
@@ -91,6 +131,69 @@ export const GraphPanel: React.FC<GraphPanelProps> = ({ sessionId, isActive }) =
         <Database size={16} color="var(--success)" />
         <span className="panel-title">Knowledge Graph</span>
         <span className="kg-count">{nodes.length}</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
+          {nodes.length > 0 && !selectMode && (
+            <button
+              className="dashboard-action-btn"
+              style={{ fontSize: '11px', padding: '2px 8px' }}
+              onClick={() => setSelectMode(true)}
+              title="Select nodes to delete"
+            >
+              <CheckSquare size={12} /> Select
+            </button>
+          )}
+          {selectMode && (
+            <>
+              <button
+                className="dashboard-action-btn"
+                style={{ fontSize: '11px', padding: '2px 8px' }}
+                onClick={toggleSelectAll}
+                title="Select / deselect all"
+              >
+                {selectedIds.size === nodes.length ? <CheckSquare size={12} /> : <Square size={12} />}
+                {selectedIds.size === nodes.length ? ' Deselect all' : ` All (${nodes.length})`}
+              </button>
+              {selectedIds.size > 0 && !deleteConfirm && (
+                <button
+                  className="dashboard-action-btn"
+                  style={{ fontSize: '11px', padding: '2px 8px', color: 'var(--danger)', borderColor: 'var(--danger)' }}
+                  onClick={() => setDeleteConfirm(true)}
+                >
+                  <Trash2 size={12} /> Delete {selectedIds.size}
+                </button>
+              )}
+              {deleteConfirm && (
+                <>
+                  <span style={{ fontSize: '11px', color: 'var(--danger)', alignSelf: 'center' }}>
+                    Delete {selectedIds.size} node{selectedIds.size > 1 ? 's' : ''}?
+                  </span>
+                  <button
+                    className="dashboard-action-btn"
+                    style={{ fontSize: '11px', padding: '2px 8px', color: 'var(--danger)', borderColor: 'var(--danger)' }}
+                    onClick={handleDeleteConfirmed}
+                    disabled={deleting}
+                  >
+                    {deleting ? '…' : 'Confirm'}
+                  </button>
+                  <button
+                    className="dashboard-action-btn"
+                    style={{ fontSize: '11px', padding: '2px 8px' }}
+                    onClick={() => setDeleteConfirm(false)}
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+              <button
+                className="dashboard-action-btn"
+                style={{ fontSize: '11px', padding: '2px 8px' }}
+                onClick={exitSelectMode}
+              >
+                ✕ Done
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Content */}
@@ -123,9 +226,15 @@ export const GraphPanel: React.FC<GraphPanelProps> = ({ sessionId, isActive }) =
                       {typeNodes.map(node => (
                         <div
                           key={node.id}
-                          className={`kg-node ${newNodeIds.has(node.id) ? 'kg-node-new' : ''}`}
-                          style={{ borderLeftColor: config.color }}
+                          className={`kg-node ${newNodeIds.has(node.id) ? 'kg-node-new' : ''} ${selectMode && selectedIds.has(node.id) ? 'kg-node-selected' : ''}`}
+                          style={{ borderLeftColor: config.color, cursor: selectMode ? 'pointer' : undefined }}
+                          onClick={selectMode ? () => toggleSelectNode(node.id) : undefined}
                         >
+                          {selectMode && (
+                            <span style={{ marginRight: '6px', color: selectedIds.has(node.id) ? 'var(--danger)' : 'var(--text-muted)' }}>
+                              {selectedIds.has(node.id) ? <CheckSquare size={12} /> : <Square size={12} />}
+                            </span>
+                          )}
                           <div className="kg-node-header">
                             {node.name && <span className="kg-node-name">{node.name}</span>}
                             {node.address && <code className="kg-node-addr">{node.address}</code>}
